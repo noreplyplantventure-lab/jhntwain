@@ -1,0 +1,204 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>JhnTwain 0.0.01</title>
+    <style id="jtwStyles">
+        :root {
+            --bg: #0f0f12;
+            --txt: #e0e0e0;
+            --acc: #00ccaa;
+            --card: #1a1a22;
+        }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        body { font-family: system-ui, sans-serif; background:var(--bg); color:var(--txt); height:100vh; overflow:hidden; display:flex; flex-direction:column; }
+        #root { flex:1; display:flex; flex-direction:column; overflow:hidden; }
+        header { background:#111118; padding:12px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #333; }
+        .tabbar { display:flex; background:#1a1a22; }
+        .tab { padding:12px 20px; cursor:pointer; border-bottom:3px solid transparent; }
+        .tab.active { border-bottom:3px solid var(--acc); color:var(--acc); }
+        .panel { flex:1; overflow:auto; padding:16px; display:none; }
+        .panel.active { display:block; }
+        .card { background:var(--card); border:1px solid #333; border-radius:8px; padding:12px; margin-bottom:12px; position:relative; }
+        .entity { cursor:grab; }
+        button { background:var(--acc); color:#000; border:none; padding:8px 16px; border-radius:6px; cursor:pointer; }
+        textarea { width:100%; min-height:200px; background:#111; color:var(--txt); border:1px solid #444; border-radius:6px; padding:12px; resize:vertical; font-family:inherit; }
+        input { width:100%; background:#111; color:var(--txt); border:1px solid #444; padding:8px; border-radius:6px; }
+        .flex { display:flex; gap:8px; flex-wrap:wrap; }
+    </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script>
+// ================ UTILITIES IIFE ================
+const Utils = (function(){
+    const cssRgstry = {
+        props: ["background","color","padding","margin","border","border-radius","display","flex","gap","cursor","overflow","height","width","position","top","left","font-family","font-size","min-height","resize"],
+        map: new Map()
+    };
+
+    function regCss(el, propsObj) {
+        const style = el.style;
+        Object.keys(propsObj).forEach(k => {
+            if (!cssRgstry.props.includes(k)) cssRgstry.props.push(k);
+            style[k] = propsObj[k];
+        });
+        cssRgstry.map.set(el, propsObj);
+    }
+
+    function crtEl(tag, idOrClass = '', txt = '') {
+        const el = document.createElement(tag);
+        if (idOrClass) {
+            if (idOrClass.startsWith('.')) el.className = idOrClass.slice(1);
+            else if (idOrClass.startsWith('#')) el.id = idOrClass.slice(1);
+            else el.className = idOrClass;
+        }
+        if (txt) el.textContent = txt;
+        return el;
+    }
+
+    function appndChld(prnt, ...chlds) {
+        chlds.forEach(ch => prnt.appendChild(ch));
+        return prnt;
+    }
+
+    function showPnl(pnlId) {
+        document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+        document.getElementById(pnlId).classList.add('active');
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelector(`[data-tab="${pnlId}"]`).classList.add('active');
+    }
+
+    return { crtEl, appndChld, regCss, showPnl, cssRgstry };
+})();
+
+// ================ STATE IIFE ================
+const JhnTwainState = (function(){
+    let story = {
+        seed: { title: "The Silent Outpost", target: 5000, theme: "loneliness letting-go", premise: "Retired engineer discovers ancient AI companion on abandoned station" },
+        chars: [],
+        scenes: [],
+        conflicts: [],
+        prose: "Captain Elara Voss stepped through the airlock...\n\nThe station smelled of dust and forgotten circuits."
+    };
+
+    function addChar(name, aspect) {
+        const id = 'ch' + Date.now().toString(36);
+        story.chars.push({id, name, aspects: aspect ? [aspect] : []});
+        return story.chars[story.chars.length-1];
+    }
+
+    function saveProse(txt) { story.prose = txt; }
+
+    function getAll() { return story; }
+
+    return { getAll, addChar, saveProse };
+})();
+
+// ================ UIX IIFE ================
+const JhnTwainUIX = (function(U, S){
+    const root = document.getElementById('root');
+    
+    function buildUI() {
+        // HEADER
+        const hdr = U.crtEl('header');
+        U.appndChld(hdr,
+            U.crtEl('h1', '', 'JhnTwain 0.0.01'),
+            U.crtEl('div', '', 'Tier 1 Prototype')
+        );
+
+        // TABBARS
+        const tb = U.crtEl('div','tabbar');
+        const tabs = [
+            {id:'seed', txt:'Seed'},
+            {id:'prose', txt:'Prose'},
+            {id:'chars', txt:'Chars'},
+            {id:'wrksp', txt:'Workspace'}
+        ];
+        tabs.forEach(t => {
+            const tabEl = U.crtEl('div','tab', t.txt);
+            tabEl.dataset.tab = t.id + 'Pnl';
+            tabEl.onclick = () => U.showPnl(t.id + 'Pnl');
+            U.appndChld(tb, tabEl);
+        });
+
+        // PANELS
+        const seedPnl = U.crtEl('div','panel'); seedPnl.id = 'seedPnl';
+        seedPnl.innerHTML = `
+            <div class="card">
+                <input id="titleIn" placeholder="Story Title" value="The Silent Outpost"><br><br>
+                <input id="targetIn" type="number" placeholder="Target words" value="5000"><br><br>
+                <textarea id="premiseIn" placeholder="Premise">Retired engineer discovers ancient AI companion on abandoned station</textarea>
+            </div>
+        `;
+
+        const prosePnl = U.crtEl('div','panel'); prosePnl.id = 'prosePnl';
+        const proseArea = U.crtEl('textarea'); proseArea.value = S.getAll().prose;
+        proseArea.oninput = () => S.saveProse(proseArea.value);
+        U.appndChld(prosePnl, proseArea);
+
+        const charPnl = U.crtEl('div','panel'); charPnl.id = 'charsPnl';
+        const addCharBtn = U.crtEl('button','','+ New Character');
+        addCharBtn.onclick = () => addNewChar();
+        U.appndChld(charPnl, addCharBtn, U.crtEl('div','flex','','charList'));
+
+        const wrkPnl = U.crtEl('div','panel'); wrkPnl.id = 'wrkspPnl';
+        wrkPnl.style.position = 'relative';
+        wrkPnl.style.height = '100%';
+        wrkPnl.style.background = '#111118';
+        U.appndChld(wrkPnl, U.crtEl('div','','Drag cards here (prototype)'));
+
+        // ASSEMBLE
+        const main = U.crtEl('div','flex'); main.style.flex = '1';
+        U.appndChld(main, seedPnl, prosePnl, charPnl, wrkPnl);
+
+        U.appndChld(root, hdr, tb, main);
+
+        // Initial active
+        U.showPnl('prosePnl');
+        
+        // Load initial chars
+        loadInitialData();
+    }
+
+    function addNewChar() {
+        const name = prompt("Character name?", "Elara Voss") || "New Char";
+        const ch = S.addChar(name, "Worn by decades among circuits");
+        renderChars();
+    }
+
+    function renderChars() {
+        const list = document.querySelector('#charsPnl .charList');
+        list.innerHTML = '';
+        S.getAll().chars.forEach(ch => {
+            const c = U.crtEl('div','card entity');
+            c.textContent = `${ch.name} - ${ch.aspects[0]||''}`;
+            c.draggable = true;
+            c.ondragstart = ev => ev.dataTransfer.setData('text', ch.id);
+            list.appendChild(c);
+        });
+    }
+
+    function loadInitialData() {
+        S.addChar("Elara Voss", "Worn by decades among circuits");
+        S.addChar("Echo", "Fading memory made of light");
+        renderChars();
+    }
+
+    return { buildUI };
+})(Utils, JhnTwainState);
+
+// ================ MAIN APP ================
+(function main(){
+    JhnTwainUIX.buildUI();
+    
+    // Keyboard hint for mobile
+    console.log('%cJhnTwain 0.0.01 ready. Tap tabs. Add characters. Write prose. DRY + IIFE architecture active.', 'color:#00ccaa');
+})();
+</script>
+</body>
+</html>
+```
