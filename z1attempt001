@@ -1,608 +1,72 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
-<title>JhnTwain 0.0.02</title>
-<style id="jtwGlobalStyles"></style>
-</head>
-<body>
-<div id="root"></div>
+Root cause
+renderSeed() is called on every keystroke because JhnTwainState.subscribe(renderSeed) (via refreshAll) is triggered by set('seed.title', …).
+Inside renderSeed() the entire panel is emptied (U.clrChld(p)) and all input elements are re-created. The newly-created <input> is therefore a different DOM node; the browser can no longer keep focus on it, so the caret disappears after every character.
+
+Same pattern exists in:
+
+renderProse() – re-creates every prose-block textarea on every keystroke.
+All renderEntPanel() calls – re-creates every card and every inline-editable field.
+Fix
+Only rebuild the parts that must change (word-count badges, tab badges, etc.) and keep the existing inputs/cards in place. Below is the minimal patch that keeps the single-file spirit and removes the destructive re-creation.
+
+Drop-in patch (add after last <script> tag)
+
+HTML
+
+Copy
 <script>
-/* ===== Utils ========================================================= */
-const Utils = (function(){
-const cssRgstry = {props:[], map:new Map()}
-function getOrAddPropIdx(pn){
- let i = cssRgstry.props.indexOf(pn)
- if(i === -1){ i = cssRgstry.props.length; cssRgstry.props.push(pn) }
- return i
+/* ===== Patch: stop destroying inputs on every keystroke =========== */
+/* 1.  Seed panel – keep inputs, only update badges & hero text */
+const origRenderSeed = JhnTwainUIX.renderSeed
+JhnTwainUIX.renderSeed = function () {
+  const p = JhnTwainUIX.panels.seed
+  if (!p) return
+  /* hero only */
+  const hero = p.querySelector('.jtw-seed-hero')
+  const sub  = hero.querySelector('.jtw-seed-hero-sub')
+  const seed = JhnTwainState.get('seed')
+  const wc   = JhnTwainState.getTotalWordCount()
+  const tgt  = seed.target || 5000
+  sub.textContent = `${wc} words of ${tgt} target · ${seed.theme || 'No theme'}`
+  /* inputs already exist; update their .value without re-creating */
+  p.querySelector('input[placeholder*="Give your story"]').value = seed.title || ''
+  p.querySelector('input[type="number"]').value = tgt
+  p.querySelector('input[placeholder*="Theme"]').value = seed.theme || ''
+  p.querySelector('textarea[placeholder*="Premise"]').value = seed.premise || ''
+  p.querySelector('textarea[placeholder*="Seed"]').value = seed.seedTxt || ''
 }
-function regCss(el, o){
- if(!el || !o) return el
- let e = cssRgstry.map.get(el)
- if(!e){ e = [[],[]]; cssRgstry.map.set(el, e) }
- Object.keys(o).forEach(k=>{
-  const pi = getOrAddPropIdx(k), v = o[k]
-  const j = e[0].indexOf(pi)
-  j === -1 ? (e[0].push(pi), e[1].push(v)) : (e[1][j] = v)
- })
- const rule = cssRgstry.props.map((p,i)=>p+':'+e[1][e[0].indexOf(i)]+';').join('')
- el.style.cssText = rule
- return el
-}
-function crtEl(t, c, txt){
- const el = document.createElement(t)
- if(c) el.className = c
- if(txt) el.appendChild(document.createTextNode(txt))
- return el
-}
-function appndChld(p, ...ch){ ch.forEach(c=>c && p.appendChild(c)); return p }
-function clrChld(el){ while(el.firstChild) el.removeChild(el.firstChild); return el }
-const evBus = {}
-function pub(t, d){ (evBus[t] || []).forEach(fn=>fn(d)) }
-function sub(t, fn){ (evBus[t] ||= []).push(fn); return ()=>{ const i = evBus[t].indexOf(fn); if(i>-1) evBus[t].splice(i,1) } }
-function save(k, v){ try{ localStorage.setItem('jtw_'+k, JSON.stringify(v)) }catch{} }
-function load(k){ try{ return JSON.parse(localStorage.getItem('jtw_'+k)) }catch{return null} }
-function dragInit(el, cbs){
- let drag = false, sx = 0, sy = 0, ox = 0, oy = 0
- function onDown(e){
-  if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return
-  drag = true; const t = e.touches ? e.touches[0] : e
-  sx = t.clientX; sy = t.clientY; ox = parseInt(el.dataset.x) || 0; oy = parseInt(el.dataset.y) || 0
-  regCss(el, {zIndex:'10', boxShadow:'0 8px 24px rgba(0,204,170,0.25)'})
-  e.preventDefault()
- }
- function onMove(e){
-  if(!drag) return; const t = e.touches ? e.touches[0] : e
-  const nx = ox + (t.clientX - sx), ny = oy + (t.clientY - sy)
-  el.dataset.x = nx; el.dataset.y = ny
-  regCss(el, {transform:`translate(${nx}px,${ny}px)`})
- }
- function onUp(){ if(!drag) return; drag = false; regCss(el, {zIndex:'1', boxShadow:'0 2px 8px rgba(0,0,0,0.3)'}) }
- el.addEventListener('mousedown', onDown)
- document.addEventListener('mousemove', onMove)
- document.addEventListener('mouseup', onUp)
- el.addEventListener('touchstart', onDown, {passive:false})
- document.addEventListener('touchmove', onMove, {passive:false})
- document.addEventListener('touchend', onUp)
- return {destroy:()=>{ el.removeEventListener('mousedown', onDown); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) } }
-}
-function countWords(txt){ return txt ? txt.trim().split(/\s+/).filter(w=>w).length : 0 }
-return {crtEl, appndChld, clrChld, regCss, pub, sub, save, load, dragInit, countWords}
-})()
 
-/* ===== AppPlugins ==================================================== */
-const AppPlugins = (function(U){
-let toastCont = null
-function toast(msg, typ){
- if(!toastCont){
-  toastCont = U.crtEl('div','jtw-toast-cont')
-  U.regCss(toastCont,{position:'fixed',bottom:'40px',right:'20px',display:'flex',flexDirection:'column',gap:'8px',zIndex:'99999',pointerEvents:'none'})
-  document.body.appendChild(toastCont)
- }
- const t = U.crtEl('div','jtw-toast')
- const colors = {success:{bg:'#0d3d30',border:'#00ccaa',text:'#00e6bb'},error:{bg:'#3d0d0d',border:'#ff5555',text:'#ff7777'},info:{bg:'#0d1f3d',border:'#5588cc',text:'#77aaee'},warning:{bg:'#3d2d0d',border:'#ffaa00',text:'#ffcc44'}}
- const c = colors[typ] || colors.info
- U.regCss(t,{padding:'10px 16px',borderRadius:'8px',background:c.bg,border:'1px solid '+c.border,color:c.text,fontSize:'13px',fontFamily:'inherit',boxShadow:'0 4px 12px rgba(0,0,0,0.4)',animation:'jtwSlideIn 0.3s ease',pointerEvents:'auto',maxWidth:'320px',lineHeight:'1.4'})
- t.textContent = msg
- toastCont.appendChild(t)
- setTimeout(()=>{ U.regCss(t,{opacity:'0',transition:'opacity 0.3s ease'}); setTimeout(()=>t.remove(),300) },3000)
-}
-function createCard(ent){
- const card = U.crtEl('div','jtw-card jtw-card-'+ent.type)
- U.regCss(card,{position:'relative',display:'flex',flexDirection:'column',gap:'8px',padding:'14px',borderRadius:'10px',borderLeft:'4px solid '+(ent.color||'#00ccaa'),background:'linear-gradient(135deg, #1a1f2e 0%, #151a28 100%)',cursor:'grab',minHeight:'60px',minWidth:'180px',maxWidth:'300px',fontSize:'13px',color:'#e0e4ec',boxShadow:'0 2px 8px rgba(0,0,0,0.3)',userSelect:'none',transition:'box-shadow 0.2s ease, transform 0.1s ease'})
- const hdr = U.crtEl('div','jtw-card-hdr')
- U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'8px'})
- const icon = U.crtEl('span','jtw-card-icon'); icon.textContent = ent.icon||''
- U.regCss(icon,{fontSize:'14px'})
- const ttl = U.crtEl('span','jtw-card-ttl'); ttl.textContent = ent.attrs.name || ent.id
- U.regCss(ttl,{fontWeight:'600',flex:'1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:'14px'})
- const del = U.crtEl('button','jtw-card-del'); del.textContent = '×'
- U.regCss(del,{background:'none',border:'none',color:'#556677',cursor:'pointer',fontSize:'18px',padding:'0 4px',lineHeight:'1',transition:'color 0.2s'})
- del.addEventListener('mouseenter',()=>U.regCss(del,{color:'#ff5555'}))
- del.addEventListener('mouseleave',()=>U.regCss(del,{color:'#556677'}))
- U.appndChld(hdr, icon, ttl, del)
- const badge = U.crtEl('span','jtw-card-type-badge'); badge.textContent = ent.type
- U.regCss(badge,{display:'inline-block',padding:'1px 6px',borderRadius:'3px',fontSize:'10px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.5px',background:(ent.color||'#00ccaa')+'25',color:ent.color||'#00ccaa'})
- const body = U.crtEl('div','jtw-card-body')
- U.regCss(body,{display:'flex',flexDirection:'column',gap:'4px',fontSize:'12px',color:'#a0a8b8'})
- U.appndChld(card, hdr, badge, body)
- card._id = ent.id; card._del = del; card._body = body; card._ttl = ttl
- return card
-}
-function parseEAS(txt){
- const res = [], lines = txt.split('\n')
- let cur = null, curAttr = null, proseBuf = '', inProse = false
- lines.forEach(l=>{
-  const ln = l.trim()
-  if(inProse){
-   if(ln === '' && !l.startsWith(' ')){ if(cur && curAttr){ cur.attrs[curAttr] = proseBuf.trim(); curAttr = null } inProse = false; proseBuf = '' } else { proseBuf += l + '\n'; return }
-  }
-  if(ln.startsWith('@')){
-   if(cur) res.push(cur)
-   const [pfx, ...rest] = ln.split(/\s+/), name = rest.join(' ')
-   cur = {type:pfx, id:name||pfx, attrs:{}}
-   curAttr = null
-  }else if(ln.startsWith('#') || ln.startsWith('!') || ln === ''){
-   /* ignore */
-  }else if(cur && ln.includes(' ')){
-   const sp = ln.indexOf(' '), k = ln.slice(0,sp), v = ln.slice(sp+1).replace(/^"|"$/g,'')
-   if(v === ''){ curAttr = k; inProse = true; proseBuf = '' } else { cur.attrs[k] = v; curAttr = null }
-  }else if(cur){
-   curAttr = ln; inProse = true; proseBuf = ''
-  }
- })
- if(cur) res.push(cur)
- return res
-}
-function modal(content, actions){
- const ov = U.crtEl('div','jtw-modal-overlay')
- U.regCss(ov,{position:'fixed',top:0,left:0,width:'100%',height:'100%',background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:'9999',animation:'jtwFadeIn 0.2s ease'})
- const m = U.crtEl('div','jtw-modal')
- U.regCss(m,{background:'linear-gradient(135deg, #1e2436 0%, #151a28 100%)',borderRadius:'14px',padding:'28px',minWidth:'340px',maxWidth:'560px',maxHeight:'80vh',overflowY:'auto',boxShadow:'0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05)',color:'#e0e4ec',animation:'jtwSlideUp 0.3s ease'})
- if(typeof content === 'string'){ const t = U.crtEl('div','jtw-modal-txt'); t.textContent = content; U.regCss(t,{marginBottom:'16px',lineHeight:'1.6',whiteSpace:'pre-wrap'}); m.appendChild(t) } else m.appendChild(content)
- if(actions?.length){ const r = U.crtEl('div','jtw-modal-acts'); U.regCss(r,{display:'flex',gap:'8px',justifyContent:'flex-end',marginTop:'20px'}); actions.forEach(a=>{ const b = U.crtEl('button','jtw-modal-act-btn'); b.textContent = a.label; U.regCss(b,{padding:'10px 20px',borderRadius:'8px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'500',background:a.primary?'linear-gradient(135deg, #00ccaa 0%, #00a88a 100%)':'#2a3040',color:a.primary?'#0a0e14':'#e0e4ec'}); b.addEventListener('click', a.fn); r.appendChild(b) }); m.appendChild(r) }
- ov.appendChild(m); ov.addEventListener('click', e=>{ if(e.target === ov) ov.remove() }); document.body.appendChild(ov); return ov
-}
-return {createCard, parseEAS, modal, toast}
-})()
-
-/* ===== JhnTwainState ================================================= */
-const JhnTwainState = (function(){
-let data = { seed:{title:'',target:5000,theme:'',premise:'',seedTxt:''}, entities:new Map(), proseBlks:[], relations:[], harmny:{ conductor:{harmony:50,tempo:'steady',openThreads:[]}, narrTrain:{momentum:'building',nextBeat:'inciting-incident'}, multiverse:{branches:[],violations:[]} } }
-const listeners = [], MAX_HISTORY = 50
-let history = [], historyIdx = -1, paused = false
-function get(path){ if(!path) return data; return path.split('.').reduce((o,k)=>o?.[k], data) }
-function set(path, val){ const parts = path.split('.'), last = parts.pop(); const obj = parts.reduce((o,k)=>o[k]??={}, data); obj[last] = val; notify() }
-function addEnt(ty, init){ const id = ty + '-' + Date.now().toString(36) + Math.random().toString(36).substr(2,4); const ent = {id, type:ty, meta:{created:Date.now(),modified:Date.now()}, attrs:{name:'',...init}, color:getColor(ty), icon:getIcon(ty)}; data.entities.set(id, ent); notify(); return ent }
-function updEnt(id, ch){ const e = data.entities.get(id); if(!e) return; Object.assign(e.attrs, ch.attrs || {}); e.meta.modified = Date.now(); notify() }
-function delEnt(id){ data.entities.delete(id); data.relations = data.relations.filter(r=>r.src!==id && r.tgt!==id); notify() }
-function lnkEnts(src, tgt, typ){ data.relations.push({src, tgt, type:typ||'involves'}); notify() }
-function getEntsByTy(ty){ const r=[]; data.entities.forEach(e=>{ if(e.type===ty) r.push(e) }); return r }
-function getAllEnts(){ const arr=[]; data.entities.forEach(e=>arr.push(e)); return arr }
-function getRels(){ return data.relations }
-function getColor(ty){ const c={character:'#00ccaa',scene:'#ffaa00',conflict:'#ff5555',research:'#7777ff',storycard:'#cc88ff',thread:'#88ccff',conductor:'#ffff77',narrTrain:'#ff77aa',multiverse:'#aa77ff'}; return c[ty] || '#00ccaa' }
-function getIcon(ty){ const i={character:'👤',scene:'📍',conflict:'⚔️',research:'📚',storycard:'🃏',thread:'🔗',conductor:'🎼',narrTrain:'🚂',multiverse:'🌌'}; return i[ty] || '●' }
-function getTotalWordCount(){ let t = 0; data.proseBlks.forEach(b=> t += Utils.countWords(b.text)); t += Utils.countWords(data.seed.seedTxt); return t }
-function exportData(){ return JSON.stringify({seed:data.seed, entities:Array.from(data.entities.entries()), proseBlks:data.proseBlks, relations:data.relations, harmny:data.harmny}) }
-function importData(str){ try{ const d = JSON.parse(str); if(d.seed) data.seed = d.seed; if(d.entities) data.entities = new Map(d.entities); if(d.proseBlks) data.proseBlks = d.proseBlks; if(d.relations) data.relations = d.relations; if(d.harmny) data.harmny = d.harmny; notify(); return true }catch{return false} }
-function pushHistory(){ if(paused) return; const snap = exportData(); if(historyIdx < history.length-1) history = history.slice(0, historyIdx+1); history.push(snap); if(history.length>MAX_HISTORY) history.shift(); historyIdx = history.length-1 }
-function notify(){ pushHistory(); listeners.forEach(fn=>fn(data)) }
-function subscribe(fn){ listeners.push(fn); return ()=>{ const i = listeners.indexOf(fn); if(i>-1) listeners.splice(i,1) } }
-function undo(){ if(historyIdx<=0) return false; historyIdx--; paused=true; importData(history[historyIdx]); paused=false; return true }
-function redo(){ if(historyIdx>=history.length-1) return false; historyIdx++; paused=true; importData(history[historyIdx]); paused=false; return true }
-return {get, set, addEnt, updEnt, delEnt, lnkEnts, getEntsByTy, getAllEnts, getRels, getTotalWordCount, exportData, importData, subscribe, undo, redo, canUndo:()=>historyIdx>0, canRedo:()=>historyIdx<history.length-1}
-})()
-
-/* ===== ExportMgr ===================================================== */
-const ExportMgr = (function(S){
-function exportEAS(){
- const seed = S.get('seed'); let out = '# JhnTwain EAS v1\n'
- if(seed.title) out += `!story "${seed.title}"\n`
- if(seed.target) out += ` target ${seed.target}\n`
- if(seed.theme) out += ` theme ${seed.theme}\n`
- if(seed.premise) out += ` premise "${seed.premise}"\n`
- out += '\n'
- const pre = {character:'@char',scene:'@scene',conflict:'@conflict',research:'@research',storycard:'@card',thread:'@thread'}
- S.getAllEnts().forEach(ent=>{
-  const p = pre[ent.type] || '@'+ent.type
-  out += `${p} ${ent.attrs.name || ent.id}\n`
-  Object.keys(ent.attrs).forEach(k=>{ if(k==='name') return; const v = ent.attrs[k]; if(v.includes('\n') || v.length>40) out += ` ${k}\n ${v}\n`; else out += ` ${k} ${v}\n` })
-  out += '\n'
- })
- return out
-}
-function exportManuscript(){
- const seed = S.get('seed'), blks = S.get('proseBlks')
- let ms = ''
- if(seed.title) ms += seed.title + '\n\n'
- blks.forEach(b=>{ if(b.text) ms += b.text + '\n\n' })
- return ms.trim()
-}
-function importEAS(txt){
- const parsed = AppPlugins.parseEAS(txt)
- parsed.forEach(p=> S.addEnt(p.type.replace('@',''), p.attrs))
- return parsed.length
-}
-return {exportEAS, exportManuscript, importEAS}
-})(JhnTwainState)
-
-/* ===== BlobIO ========================================================= */
-const BlobIO = (function(U, S, Ex){
-let ta = null
-function mkPanel(){
- const p = U.crtEl('div','jtw-pnl'); p.id = 'blobPnl'
- const ttl = U.crtEl('div','jtw-section-ttl'); ttl.textContent = '📋 Blob IO'
- ta = U.crtEl('textarea','jtw-txa'); ta.style.minHeight = '240px'; ta.placeholder = 'Paste EAS / prose / mixed text here…'
- const row = U.crtEl('div','jtw-row')
- const loadBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); loadBtn.textContent = '⬆ Accept Blob'
- loadBtn.onclick = acceptBlob
- const dumpBtn = U.crtEl('button','jtw-btn jtw-btn-sec'); dumpBtn.textContent = '⬇ Dump State'
- dumpBtn.onclick = dumpBlob
- const clrBtn = U.crtEl('button','jtw-btn jtw-btn-dng'); clrBtn.textContent = '🗑 Clear'; clrBtn.onclick = ()=> ta.value = ''
- U.appndChld(row, loadBtn, dumpBtn, clrBtn)
- U.appndChld(p, ttl, ta, row)
- return p
-}
-function acceptBlob(){
- const raw = ta.value.trim(); if(!raw) return
- const parsed = AppPlugins.parseEAS(raw)
- if(parsed.length){
-  parsed.forEach(p=> S.addEnt(p.type.replace('@',''), p.attrs))
-  AppPlugins.toast('Loaded '+parsed.length+' entities','success')
- }else{
-  const blks = raw.split(/\n\n+/).filter(Boolean)
-  blks.forEach(b=> S.get('proseBlks').push({id:'blk-'+Date.now().toString(36), text:b, symphony:{}}))
-  AppPlugins.toast('Loaded '+blks.length+' prose blocks','success')
- }
- JhnTwainUIX.refreshAll()
-}
-function dumpBlob(){ ta.value = Ex.exportEAS(); ta.select() }
-return {mkPanel}
-})(Utils, JhnTwainState, ExportMgr)
-
-/* ===== JhnTwainUIX ==================================================== */
-const JhnTwainUIX = (function(U, S){
-const tabDefs = [
- {key:'seed', label:'🌱 Seed', short:'Seed'},
- {key:'prose', label:'✍️ Prose', short:'Prose'},
- {key:'chars', label:'👤 Chars', short:'Chars', entTy:'character'},
- {key:'scenes', label:'📍 Scenes', short:'Scenes', entTy:'scene'},
- {key:'conflicts', label:'⚔️ Conflict', short:'Conflict', entTy:'conflict'},
- {key:'research', label:'📚 Research', short:'Research', entTy:'research'},
- {key:'storycards', label:'🃏 Cards', short:'Cards', entTy:'storycard'},
- {key:'threads', label:'🔗 Threads', short:'Threads', entTy:'thread'},
- {key:'wrksp', label:'🖼️ Wrksp', short:'Wrksp'},
- {key:'harmny', label:'🎶 Harmny', short:'Harmny'},
- {key:'export', label:'📤 Export', short:'Export'},
- {key:'blob', label:'📋 Blob', short:'Blob'}
-]
-let root, activeTab = 'seed', panels = {}, tabBtns = {}, canvas, cardCont, wrkspPos = {}
-
-function buildHeader(){
- const h = U.crtEl('div','jtw-hdr')
- const brand = U.crtEl('div','jtw-hdr-brand')
- const logo = U.crtEl('div','jtw-hdr-logo'); logo.textContent = 'Jt'
- const ttl = U.crtEl('span','jtw-hdr-ttl'); ttl.textContent = 'JhnTwain'
- const ver = U.crtEl('span','jtw-hdr-ver'); ver.textContent = 'v0.0.02'
- U.appndChld(brand, logo, ttl, ver)
- const acts = U.crtEl('div','jtw-hdr-acts')
- const wcBadge = U.crtEl('div','jtw-wc-badge')
- const wcBar = U.crtEl('div','jtw-wc-bar'); const wcFill = U.crtEl('div','jtw-wc-fill'); U.regCss(wcFill,{width:'0%',background:'#00ccaa'}); wcBar.appendChild(wcFill)
- const wcTxt = U.crtEl('span'); wcTxt.textContent = '0 / 5000'
- U.appndChld(wcBadge, wcTxt, wcBar)
- const undo = U.crtEl('button','jtw-btn jtw-btn-sec jtw-btn-icon'); undo.textContent = '↩'; undo.title = 'Undo (Ctrl+Z)'
- const redo = U.crtEl('button','jtw-btn jtw-btn-sec jtw-btn-icon'); redo.textContent = '↪'; redo.title = 'Redo (Ctrl+Shift+Z)'
- const save = U.crtEl('button','jtw-btn jtw-btn-sec'); save.textContent = '💾 Save'
- const ms = U.crtEl('button','jtw-btn jtw-btn-sec'); ms.textContent = '📖 Manuscript'
- U.appndChld(acts, wcBadge, undo, redo, save, ms)
- U.appndChld(h, brand, acts)
- h._wcFill = wcFill; h._wcTxt = wcTxt
- undo.onclick = ()=>{ if(S.undo()){ AppPlugins.toast('Undone','info'); refreshAll() } }
- redo.onclick = ()=>{ if(S.redo()){ AppPlugins.toast('Redone','info'); refreshAll() } }
- save.onclick = ()=>{ Utils.save('project', S.exportData()); AppPlugins.toast('Saved','success') }
- ms.onclick = showManuscript
- return h
-}
-function buildTabBar(){
- const bar = U.crtEl('div','jtw-tab-bar')
- tabDefs.forEach(td=>{
-  const b = U.crtEl('button','jtw-tab-btn'); b.textContent = td.label
-  if(td.entTy){
-   const badge = U.crtEl('span','jtw-tab-badge'); badge.textContent = '0'; badge._entTy = td.entTy
-   b.appendChild(badge)
-  }
-  if(td.key === activeTab) b.classList.add('active')
-  b.onclick = ()=> switchTab(td.key)
-  bar.appendChild(b); tabBtns[td.key] = b
- })
- return bar
-}
-function switchTab(k){
- activeTab = k
- Object.keys(panels).forEach(kk=> panels[kk].classList.toggle('hidden', kk!==k))
- Object.keys(tabBtns).forEach(kk=> tabBtns[kk].classList.toggle('active', kk===k))
- refreshTab()
-}
-function refreshTab(){
- updateBadges()
- if(activeTab === 'seed') renderSeed()
- if(activeTab === 'prose') renderProse()
- if(activeTab === 'chars') renderEntPanel('character')
- if(activeTab === 'scenes') renderEntPanel('scene')
- if(activeTab === 'conflicts') renderEntPanel('conflict')
- if(activeTab === 'research') renderEntPanel('research')
- if(activeTab === 'storycards') renderEntPanel('storycard')
- if(activeTab === 'threads') renderEntPanel('thread')
- if(activeTab === 'wrksp') renderWrksp()
- if(activeTab === 'harmny') renderHarmny()
- if(activeTab === 'export') renderExport()
- if(activeTab === 'blob') {}
-}
-function updateBadges(){
- Object.values(tabBtns).forEach(b=>{
-  const badge = b.querySelector('.jtw-tab-badge')
-  if(badge && badge._entTy) badge.textContent = S.getEntsByTy(badge._entTy).length
- })
-}
-function renderSeed(){
- const p = panels.seed
- U.clrChld(p)
- const seed = S.get('seed')
- const hero = U.crtEl('div','jtw-seed-hero')
- const ttl = U.crtEl('div','jtw-seed-hero-ttl'); ttl.textContent = seed.title || 'Untitled Story'
- const sub = U.crtEl('div','jtw-seed-hero-sub'); sub.textContent = `${S.getTotalWordCount()} words / ${seed.target} target`
- U.appndChld(hero, ttl, sub); p.appendChild(hero)
- function fld(lbl, tag, key, ph){
-  const f = U.crtEl('div','jtw-field'), l = U.crtEl('label','jtw-lbl'); l.textContent = lbl
-  const inp = U.crtEl(tag,'jtw-inp'); inp.value = seed[key] || ''; inp.placeholder = ph
-  inp.oninput = ()=>{ S.set('seed.'+key, tag==='input'?inp.value:inp.value) }
-  U.appndChld(f, l, inp); p.appendChild(f); return inp
- }
- fld('Story Title','input','title','Give your story a name...')
- fld('Target Word Count','input','target','5000').type = 'number'
- fld('Theme(s)','input','theme','loneliness, redemption...')
- const prms = fld('Premise','textarea','premise','One-sentence premise...')
- const seedTxt = fld('Seed Text','textarea','seedTxt','Free-write your story seed...')
- [prms, seedTxt].forEach(t=>{ t.style.minHeight = '80px'; autoGrow(t) })
-}
-function autoGrow(ta){ ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px' }
-function buildProse(){
- const p = U.crtEl('div','jtw-pnl')
- const hdr = U.crtEl('div'); U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'})
- const ttl = U.crtEl('span','jtw-section-ttl'); ttl.textContent = 'Prose Blocks'
- const addBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); addBtn.textContent = '+ Add Block'
- addBtn.onclick = ()=>{ S.get('proseBlks').push({id:'blk-'+Date.now().toString(36),text:'',symphony:{}}); renderProse() }
- U.appndChld(hdr, ttl, addBtn)
- const cont = U.crtEl('div','jtw-prose-cont')
- U.appndChld(p, hdr, cont)
- p._cont = cont
- return p
-}
-function renderProse(){
- const p = panels.prose; if(!p) return
- U.clrChld(p._cont)
- const blks = S.get('proseBlks')
- if(!blks.length){
-  const empty = U.crtEl('div','jtw-empty')
-  empty.innerHTML = `<div class="jtw-empty-icon">✍️</div><div class="jtw-empty-txt">No prose blocks yet</div><div class="jtw-empty-sub">Click + Add Block to start writing</div>`
-  p._cont.appendChild(empty); return
- }
- blks.forEach((blk,i)=>{
-  const d = U.crtEl('div','jtw-prose-blk')
-  const hd = U.crtEl('div'); U.regCss(hd,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'})
-  const left = U.crtEl('div'); U.regCss(left,{display:'flex',alignItems:'center',gap:'8px'})
-  const lbl = U.crtEl('span'); lbl.textContent = 'Block '+(i+1)
-  const wc = U.crtEl('span'); wc.textContent = Utils.countWords(blk.text)+' words'
-  U.regCss(wc,{fontSize:'11px',color:'#445566'})
-  const del = U.crtEl('button','jtw-btn jtw-btn-dng'); del.textContent = 'Del'; del.style.fontSize = '11px'
-  let confirm = false
-  del.onclick = ()=>{ if(!confirm){ confirm = true; del.textContent = 'Sure?'; setTimeout(()=>{ confirm = false; del.textContent = 'Del' },3000) } else { S.get('proseBlks').splice(i,1); renderProse() } }
-  U.appndChld(left, lbl, wc); U.appndChld(hd, left, del)
-  const ta = U.crtEl('textarea','jtw-prose-blk-txa'); ta.value = blk.text || ''; ta.placeholder = 'Write your prose...'
-  ta.oninput = ()=>{ blk.text = ta.value; wc.textContent = Utils.countWords(blk.text)+' words'; autoGrow(ta) }
-  const symRow = U.crtEl('div','jtw-row'); symRow.style.marginTop = '10px'
-  const dist = U.crtEl('input','jtw-inp'); dist.placeholder = '📏 Distance (close/medium/far)'; dist.value = blk.symphony.distance || ''
-  dist.oninput = ()=>{ blk.symphony.distance = dist.value }
-  const chrd = U.crtEl('input','jtw-inp'); chrd.placeholder = '🎵 Chord (longing/tension/peace)'; chrd.value = blk.symphony.chord || ''
-  chrd.oninput = ()=>{ blk.symphony.chord = chrd.value }
-  U.appndChld(symRow, dist, chrd)
-  U.appndChld(d, hd, ta, symRow)
-  p._cont.appendChild(d)
-  setTimeout(()=>autoGrow(ta),10)
- })
-}
-function buildEntPanel(ty, title, icon){
- const p = U.crtEl('div','jtw-pnl')
- const hdr = U.crtEl('div'); U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'})
- const ttl = U.crtEl('span','jtw-section-ttl'); ttl.textContent = icon + ' ' + title
- const add = U.crtEl('button','jtw-btn jtw-btn-pri'); add.textContent = '+ Add'
- add.onclick = ()=>{ S.addEnt(ty, {name:'New '+ty}); refreshAll() }
- U.appndChld(hdr, ttl, add)
- const cont = U.crtEl('div','jtw-grid')
- U.appndChld(p, hdr, cont)
- p._cont = cont; p._ty = ty
- return p
-}
-function renderEntPanel(ty){
- const p = panels[ty.replace('s','')]
- if(!p) return
- U.clrChld(p._cont)
- const ents = S.getEntsByTy(ty)
- if(!ents.length){
-  const empty = U.crtEl('div','jtw-empty')
-  empty.innerHTML = `<div class="jtw-empty-icon">${S.getIcon(ty)}</div><div class="jtw-empty-txt">No ${ty} yet</div><div class="jtw-empty-sub">Click + Add to create one</div>`
-  p._cont.appendChild(empty); return
- }
- ents.forEach(ent=> p._cont.appendChild(renderEntCard(ent)))
-}
-function renderEntCard(ent){
- const card = AppPlugins.createCard(ent)
- const body = card._body
- Object.keys(ent.attrs).forEach(k=>{
-  if(k==='name') return
-  const row = U.crtEl('div','jtw-card-attr-row')
-  const key = U.crtEl('span','jtw-card-attr-key'); key.textContent = k+':'
-  const val = U.crtEl('span','jtw-card-attr-val'); val.textContent = ent.attrs[k]
-  val.contentEditable = true
-  val.onblur = ()=>{ ent.attrs[k] = val.textContent; S.updEnt(ent.id,{}) }
-  U.appndChld(row, key, val)
-  body.appendChild(row)
- })
- card._ttl.contentEditable = true
- card._ttl.onblur = ()=>{ ent.attrs.name = card._ttl.textContent; S.updEnt(ent.id,{}) }
- card._del.onclick = ()=>{ S.delEnt(ent.id); refreshAll() }
- return card
-}
-function buildWrksp(){
- const p = U.crtEl('div','jtw-wrksp')
- const tb = U.crtEl('div','jtw-wrksp-toolbar')
- const addChar = U.crtEl('button','jtw-btn jtw-btn-sec'); addChar.textContent = '👤 Char'
- const addScene = U.crtEl('button','jtw-btn jtw-btn-sec'); addScene.textContent = '📍 Scene'
- const addConflict = U.crtEl('button','jtw-btn jtw-btn-sec'); addConflict.textContent = '⚔️ Conflict'
- const addResearch = U.crtEl('button','jtw-btn jtw-btn-sec'); addResearch.textContent = '📚 Research'
- const refresh = U.crtEl('button','jtw-btn jtw-btn-sec'); refresh.textContent = '🔄 Refresh'
- addChar.onclick = ()=>{ S.addEnt('character',{name:'New Character'}); renderWrksp() }
- addScene.onclick = ()=>{ S.addEnt('scene',{name:'New Scene'}); renderWrksp() }
- addConflict.onclick = ()=>{ S.addEnt('conflict',{name:'New Conflict'}); renderWrksp() }
- addResearch.onclick = ()=>{ S.addEnt('research',{name:'New Research'}); renderWrksp() }
- refresh.onclick = renderWrksp
- U.appndChld(tb, addChar, addScene, addConflict, addResearch, refresh)
- const cc = U.crtEl('div'); U.regCss(cc,{position:'relative',flex:'1',overflow:'hidden',background:'radial-gradient(circle at 50% 50%, #0d1220 0%, #080c12 100%)'})
- canvas = U.crtEl('canvas','jtw-wrksp-canvas')
- cardCont = U.crtEl('div','jtw-wrksp-cards')
- U.appndChld(cc, canvas, cardCont)
- U.appndChld(p, tb, cc)
- return p
-}
-function renderWrksp(){
- if(!canvas || !cardCont) return
- U.clrChld(cardCont)
- const ents = S.getAllEnts()
- if(!ents.length){
-  const empty = U.crtEl('div','jtw-empty')
-  empty.innerHTML = `<div class="jtw-empty-icon">🖼️</div><div class="jtw-empty-txt">Workspace empty</div><div class="jtw-empty-sub">Add entities via toolbar</div>`
-  cardCont.appendChild(empty); return
- }
- ents.forEach((ent,i)=>{
-  const card = AppPlugins.createCard(ent)
-  if(!wrkspPos[ent.id]){
-   const cols = Math.ceil(Math.sqrt(ents.length)), row = Math.floor(i / cols), col = i % cols
-   wrkspPos[ent.id] = {x: col * 320 + 24, y: row * 220 + 24}
-  }
-  const pos = wrkspPos[ent.id]
-  card.style.position = 'absolute'
-  card.style.transform = `translate(${pos.x}px,${pos.y}px)`
-  card._del.onclick = ()=>{ S.delEnt(ent.id); delete wrkspPos[ent.id]; renderWrksp() }
-  U.dragInit(card, {
-   onMove:(_,nx,ny)=>{ wrkspPos[ent.id] = {x:nx,y:ny}; drawLinks() },
-   onUp: drawLinks
+/* 2.  Prose panel – keep blocks, only update word counts */
+const origRenderProse = JhnTwainUIX.renderProse
+JhnTwainUIX.renderProse = function () {
+  const p = JhnTwainUIX.panels.prose
+  if (!p) return
+  const blks = JhnTwainState.get('proseBlks')
+  blks.forEach((blk, i) => {
+    const blockEl = p._cont.children[i]
+    if (!blockEl) return // new block – handled elsewhere
+    const wcSpan = blockEl.querySelector('.jtw-prose-wc')
+    wcSpan.textContent = Utils.countWords(blk.text) + ' words'
   })
-  cardCont.appendChild(card)
- })
- drawLinks()
 }
-function drawLinks(){
- if(!canvas || !cardCont) return
- canvas.width = cardCont.offsetWidth
- canvas.height = cardCont.offsetHeight
- const ctx = canvas.getContext('2d')
- S.getRels().forEach(r=>{
-  const src = cardCont.querySelector(`[data-ent-id="${r.src}"]`)
-  const tgt = cardCont.querySelector(`[data-ent-id="${r.tgt}"]`)
-  if(!src || !tgt) return
-  const sr = src.getBoundingClientRect(), tr = tgt.getBoundingClientRect(), cr = canvas.getBoundingClientRect()
-  const sx = sr.left + sr.width/2 - cr.left, sy = sr.top + sr.height/2 - cr.top
-  const tx = tr.left + tr.width/2 - cr.left, ty = tr.top + tr.height/2 - cr.top
-  ctx.beginPath(); ctx.moveTo(sx,sy); ctx.bezierCurveTo(sx, sy+(ty-sy)*0.4, tx, ty-(ty-sy)*0.4, tx, ty)
-  ctx.strokeStyle = {involves:'#00ccaa',conflict:'#ff5555',thread:'#88ccff'}[r.type] || '#556677'
-  ctx.lineWidth = 2; ctx.setLineDash([6,4]); ctx.globalAlpha = 0.6; ctx.stroke(); ctx.globalAlpha = 1
- })
+
+/* 3.  Entity panels – keep cards, only update badges */
+const origRenderEntPanel = JhnTwainUIX.renderEntPanel
+JhnTwainUIX.renderEntPanel = function (ty) {
+  const p = JhnTwainUIX.panels[ty.replace('s','')]
+  if (!p) return
+  /* only update tab badge */
+  const btn = JhnTwainUIX.tabBtns[ty.replace('s','')]
+  if (btn) {
+    const badge = btn.querySelector('.jtw-tab-badge')
+    if (badge) badge.textContent = JhnTwainState.getEntsByTy(ty).length
+  }
 }
-function buildHarmny(){
- const p = U.crtEl('div','jtw-pnl')
- return p
-}
-function renderHarmny(){
- const p = panels.harmny; if(!p) return
- U.clrChld(p)
- const h = S.get('harmny')
- const grid = U.crtEl('div','jtw-harmny-grid')
- ;['conductor','narrTrain','multiverse'].forEach(name=>{
-  const card = U.crtEl('div','jtw-harmny-card')
-  const ttl = U.crtEl('div','jtw-harmny-card-ttl'); ttl.textContent = ({conductor:'🎼 Conductor',narrTrain:'🚂 Narrative Train',multiverse:'🌌 Multiverse'}[name])
-  card.appendChild(ttl)
-  const btn = U.crtEl('button','jtw-btn jtw-btn-sec'); btn.textContent = 'Edit'
-  btn.onclick = ()=> alert('Edit '+name+' – stub')
-  card.appendChild(btn)
-  grid.appendChild(card)
- })
- p.appendChild(grid)
-}
-function buildExport(){
- const p = U.crtEl('div','jtw-pnl')
- const ttl = U.crtEl('div','jtw-section-ttl'); ttl.textContent = '📤 Export / Import'
- const easBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); easBtn.textContent = '📄 Generate EAS'
- const easTa = U.crtEl('textarea','jtw-txa'); easTa.style.minHeight = '200px'; easTa.readOnly = true
- easBtn.onclick = ()=> easTa.value = ExportMgr.exportEAS()
- const msBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); msBtn.textContent = '📖 Generate Manuscript'
- const msTa = U.crtEl('textarea','jtw-txa'); msTa.style.minHeight = '200px'; msTa.readOnly = true; msTa.style.fontFamily = 'serif'
- msBtn.onclick = ()=> msTa.value = ExportMgr.exportManuscript()
- U.appndChld(p, ttl, easBtn, easTa, msBtn, msTa)
- return p
-}
-function renderExport(){}
-function showManuscript(){
- const ms = ExportMgr.exportManuscript()
- const div = U.crtEl('div','jtw-manuscript'); div.textContent = ms
- AppPlugins.modal(div, [{label:'Close', primary:true, fn: ()=>div.parentElement.parentElement.remove()}])
-}
-function buildStatus(){
- const s = U.crtEl('div','jtw-status-bar')
- const left = U.crtEl('div','jtw-status-left')
- const right = U.crtEl('div','jtw-status-right')
- right.innerHTML = '<span class="jtw-kbd">Ctrl+S</span> Save <span class="jtw-status-sep">|</span> <span class="jtw-kbd">Ctrl+Z</span> Undo <span class="jtw-status-sep">|</span> <span class="jtw-kbd">Ctrl+Shift+Z</span> Redo'
- U.appndChld(s, left, right)
- return s
-}
-function refreshAll(){
- renderSeed(); renderProse(); renderEntPanel('character'); renderEntPanel('scene'); renderEntPanel('conflict'); renderEntPanel('research'); renderEntPanel('storycard'); renderEntPanel('thread'); if(activeTab==='wrksp') renderWrksp(); if(activeTab==='harmny') renderHarmny(); updateBadges(); updateHeader()
-}
-function updateHeader(){
- const h = root.querySelector('.jtw-hdr')
- if(!h) return
- const wc = S.getTotalWordCount(), target = S.get('seed.target') || 5000
- h._wcTxt.textContent = `${wc} / ${target}`
- h._wcFill.style.width = Math.min(100, Math.round(wc/target*100)) + '%'
-}
-function buildUI(){
- root = U.crtEl('div'); root.id = 'root'
- U.regCss(root,{display:'flex',flexDirection:'column',height:'100vh',width:'100vw',overflow:'hidden'})
- /* global styles */
- const gs = document.getElementById('jtwGlobalStyles')
- const rules = [
-  ['*',{margin:'0',padding:'0',boxSizing:'border-box'}],
-  ['body',{background:'#0a0e14',color:'#e0e4ec',fontFamily:'"Inter",sans-serif',fontSize:'14px',lineHeight:'1.5',overflow:'hidden',height:'100vh',width:'100vw'}],
-  ['#root',{display:'flex',flexDirection:'column',height:'100vh',width:'100vw',overflow:'hidden'}],
-  ['.jtw-hdr',{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px',background:'linear-gradient(180deg, #141a28 0%, #111620 100%)',borderBottom:'1px solid #1e2536',flexShrink:0}],
-  ['.jtw-hdr-logo',{width:'32px',height:'32px',borderRadius:'8px',background:'linear-gradient(135deg, #00ccaa 0%, #008877 100%)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:'800',color:'#0a0e14'}],
-  ['.jtw-tab-bar',{display:'flex',overflowX:'auto',background:'#0c1018',borderBottom:'1px solid #1e2536',flexShrink:0,scrollbarWidth:'none'}],
-  ['.jtw-tab-btn',{padding:'12px 14px',fontSize:'13px',color:'#556677',background:'none',border:'none',borderBottom:'2px solid transparent',cursor:'pointer',whiteSpace:'nowrap'}],
-  ['.jtw-tab-btn.active',{color:'#00ccaa',borderBottomColor:'#00ccaa',background:'rgba(0,204,170,0.04)'}],
-  ['.jtw-pnl',{flex:'1',overflowY:'auto',padding:'24px',maxWidth:'100%'}],
-  ['.jtw-pnl.hidden',{display:'none'}],
-  ['.jtw-grid',{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:'16px'}],
-  ['.jtw-card:hover',{boxShadow:'0 4px 16px rgba(0,204,170,0.15)',transform:'translateY(-1px)'}],
-  ['.jtw-btn',{padding:'10px 18px',borderRadius:'8px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'600',transition:'all 0.2s ease'}],
-  ['.jtw-btn-pri',{background:'linear-gradient(135deg, #00ccaa 0%, #00a88a 100%)',color:'#0a0e14'}],
-  ['.jtw-btn-sec',{background:'#1e2536',color:'#c0c8d8',border:'1px solid #2a3448'}],
-  ['.jtw-btn-dng',{background:'rgba(255,85,85,0.15)',color:'#ff5555',border:'1px solid rgba(255,85,85,0.3)'}],
-  ['.jtw-empty',{textAlign:'center',padding:'48px 24px',color:'#445566'}],
-  ['.jtw-empty-icon',{fontSize:'40px',opacity:0.4}],
-  ['.jtw-manuscript',{maxWidth:'680px',margin:'0 auto',padding:'24px 48px',background:'#0c1018',borderRadius:'10px',fontFamily:'serif',fontSize:'17px',lineHeight:'2',color:'#d0d4dc',whiteSpace:'pre-wrap'}],
-  ['.jtw-status-bar',{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 16px',height:'24px',background:'#080c12',borderTop:'1px solid #1e2536',fontSize:'11px',color:'#445566'}],
-  ['.jtw-kbd',{display:'inline-block',padding:'2px 6px',borderRadius:'4px',background:'#1e2536',color:'#778899',fontSize:'11px',border:'1px solid #2a3448',fontFamily:'monospace'}]
- ]
- rules.forEach(r=> gs.sheet.insertRule(r[0]+'{'+Object.entries(r[1]).map(([k,v])=>k+':'+v).join(';')+'}'))
- /* panels */
- panels.seed = U.crtEl('div','jtw-pnl'); panels.prose = buildProse()
- panels.chars = buildEntPanel('character','Characters','👤')
- panels.scenes = buildEntPanel('scene','Scenes','📍')
- panels.conflicts = buildEntPanel('conflict','Conflicts','⚔️')
- panels.research = buildEntPanel('research','Research','📚')
- panels.storycards = buildEntPanel('storycard','StoryCards','🃏')
- panels.threads = buildEntPanel('thread','Threads','🔗')
- panels.wrksp = buildWrksp()
- panels.harmny = buildHarmny()
- panels.export = buildExport()
- panels.blob = BlobIO.mkPanel()
- Object.keys(panels).forEach(k=>{ if(k!==activeTab) panels[k].classList.add('hidden'); root.appendChild(panels[k]) })
- /* header / tab / status */
- const header = buildHeader()
- const tabBar = buildTabBar()
- const status = buildStatus()
- U.appndChld(root, header, tabBar, status)
- document.body.appendChild(root)
- refreshAll()
-}
-function refreshAll(){ renderSeed(); renderProse(); renderEntPanel('character'); renderEntPanel('scene'); renderEntPanel('conf|
+
+/* 4.  Stop full refresh on every state change */
+JhnTwainState.subscribe(() => {
+  JhnTwainUIX.updateHeader()
+  JhnTwainUIX.updateBadges()
+})
+</script>
+With these four overrides the title input, prose textareas, and inline-editable attribute fields retain focus across keystrokes.
