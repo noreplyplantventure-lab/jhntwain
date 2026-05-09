@@ -1,2283 +1,608 @@
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
- <meta charset="UTF-8">
- <meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
- <title>JhnTwain 0.0.01</title>
- <style id="jtwGlobalStyles"></style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0,maximum-scale=1.0,user-scalable=no">
+<title>JhnTwain 0.0.02</title>
+<style id="jtwGlobalStyles"></style>
 </head>
 <body>
- <div id="root"></div>
- <script>
+<div id="root"></div>
+<script>
+/* ===== Utils ========================================================= */
 const Utils = (function(){
- const cssRgstry = {
-  props:[],
-  map:new Map()
+const cssRgstry = {props:[], map:new Map()}
+function getOrAddPropIdx(pn){
+ let i = cssRgstry.props.indexOf(pn)
+ if(i === -1){ i = cssRgstry.props.length; cssRgstry.props.push(pn) }
+ return i
+}
+function regCss(el, o){
+ if(!el || !o) return el
+ let e = cssRgstry.map.get(el)
+ if(!e){ e = [[],[]]; cssRgstry.map.set(el, e) }
+ Object.keys(o).forEach(k=>{
+  const pi = getOrAddPropIdx(k), v = o[k]
+  const j = e[0].indexOf(pi)
+  j === -1 ? (e[0].push(pi), e[1].push(v)) : (e[1][j] = v)
+ })
+ const rule = cssRgstry.props.map((p,i)=>p+':'+e[1][e[0].indexOf(i)]+';').join('')
+ el.style.cssText = rule
+ return el
+}
+function crtEl(t, c, txt){
+ const el = document.createElement(t)
+ if(c) el.className = c
+ if(txt) el.appendChild(document.createTextNode(txt))
+ return el
+}
+function appndChld(p, ...ch){ ch.forEach(c=>c && p.appendChild(c)); return p }
+function clrChld(el){ while(el.firstChild) el.removeChild(el.firstChild); return el }
+const evBus = {}
+function pub(t, d){ (evBus[t] || []).forEach(fn=>fn(d)) }
+function sub(t, fn){ (evBus[t] ||= []).push(fn); return ()=>{ const i = evBus[t].indexOf(fn); if(i>-1) evBus[t].splice(i,1) } }
+function save(k, v){ try{ localStorage.setItem('jtw_'+k, JSON.stringify(v)) }catch{} }
+function load(k){ try{ return JSON.parse(localStorage.getItem('jtw_'+k)) }catch{return null} }
+function dragInit(el, cbs){
+ let drag = false, sx = 0, sy = 0, ox = 0, oy = 0
+ function onDown(e){
+  if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return
+  drag = true; const t = e.touches ? e.touches[0] : e
+  sx = t.clientX; sy = t.clientY; ox = parseInt(el.dataset.x) || 0; oy = parseInt(el.dataset.y) || 0
+  regCss(el, {zIndex:'10', boxShadow:'0 8px 24px rgba(0,204,170,0.25)'})
+  e.preventDefault()
  }
- function getOrAddPropIdx(propName){
-  let idx = cssRgstry.props.indexOf(propName)
-  if(idx === -1){
-   idx = cssRgstry.props.length
-   cssRgstry.props.push(propName)
-  }
-  return idx
+ function onMove(e){
+  if(!drag) return; const t = e.touches ? e.touches[0] : e
+  const nx = ox + (t.clientX - sx), ny = oy + (t.clientY - sy)
+  el.dataset.x = nx; el.dataset.y = ny
+  regCss(el, {transform:`translate(${nx}px,${ny}px)`})
  }
- function regCss(el, styleObj){
-  if(!el || !styleObj) return el
-  let entry = cssRgstry.map.get(el)
-  if(!entry){
-   entry = [[],[]]
-   cssRgstry.map.set(el, entry)
-  }
-  const keys = Object.keys(styleObj)
-  for(let i = 0; i < keys.length; i++){
-   const pName = keys[i]
-   const pVal = styleObj[pName]
-   const pIdx = getOrAddPropIdx(pName)
-   const existIdx = entry[0].indexOf(pIdx)
-   if(existIdx !== -1){
-    entry[1][existIdx] = pVal
-   } else {
-    entry[0].push(pIdx)
-    entry[1].push(pVal)
-   }
-  }
-  applyCssToEl(el, entry)
-  return el
- }
- function applyCssToEl(el, entry){
-  if(!entry) return
-  const propIdxs = entry[0]
-  const propVals = entry[1]
-  for(let i = 0; i < propIdxs.length; i++){
-   const pName = cssRgstry.props[propIdxs[i]]
-   const pVal = propVals[i]
-   if(pName && el.style) el.style[pName] = pVal
-  }
- }
- function applyAllCss(){
-  cssRgstry.map.forEach(function(entry, el){ applyCssToEl(el, entry) })
- }
- function rmCssEntry(el){ cssRgstry.map.delete(el) }
- function crtEl(tag, cls, txt){
-  const el = document.createElement(tag)
-  if(cls) el.className = cls
-  if(txt){
-   const tn = document.createTextNode(txt)
-   el.appendChild(tn)
-  }
-  return el
- }
- function appndChld(prnt){
-  for(let i = 1; i < arguments.length; i++){
-   if(arguments[i]) prnt.appendChild(arguments[i])
-  }
-  return prnt
- }
- function clrChld(el){
-  while(el.firstChild) el.removeChild(el.firstChild)
-  rmCssEntry(el)
-  return el
- }
- const evntBus = {}
- function pub(topic, data){
-  if(!evntBus[topic]) return
-  for(let i = 0; i < evntBus[topic].length; i++) evntBus[topic][i](data)
- }
- function sub(topic, fn){
-  if(!evntBus[topic]) evntBus[topic] = []
-  evntBus[topic].push(fn)
-  return function(){
-   const idx = evntBus[topic].indexOf(fn)
-   if(idx !== -1) evntBus[topic].splice(idx, 1)
-  }
- }
- function saveToStore(key, val){
-  try{ localStorage.setItem('jtw_'+key, JSON.stringify(val)) } catch(e){}
- }
- function loadFromStore(key){
-  try{
-   const raw = localStorage.getItem('jtw_'+key)
-   return raw ? JSON.parse(raw) : null
-  } catch(e){ return null }
- }
- function dragInit(el, cbs){
-  let isDrag = false
-  let startX = 0
-  let startY = 0
-  let origX = 0
-  let origY = 0
-  function onDown(e){
-   if(e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT' || e.target.isContentEditable) return
-   isDrag = true
-   const touch = e.touches ? e.touches[0] : e
-   startX = touch.clientX
-   startY = touch.clientY
-   origX = parseInt(el.getAttribute('data-x')) || 0
-   origY = parseInt(el.getAttribute('data-y')) || 0
-   regCss(el, {zIndex:'10', boxShadow:'0 8px 24px rgba(0,204,170,0.25)'})
-   if(cbs && cbs.onDown) cbs.onDown(e, origX, origY)
-   e.preventDefault()
-  }
-  function onMove(e){
-   if(!isDrag) return
-   const touch = e.touches ? e.touches[0] : e
-   const dx = touch.clientX - startX
-   const dy = touch.clientY - startY
-   const nx = origX + dx
-   const ny = origY + dy
-   el.setAttribute('data-x', nx)
-   el.setAttribute('data-y', ny)
-   regCss(el, {transform:'translate('+nx+'px,'+ny+'px)'})
-   if(cbs && cbs.onMove) cbs.onMove(e, nx, ny)
-  }
-  function onUp(e){
-   if(!isDrag) return
-   isDrag = false
-   regCss(el, {zIndex:'1', boxShadow:'0 2px 8px rgba(0,0,0,0.3)'})
-   const nx = parseInt(el.getAttribute('data-x')) || 0
-   const ny = parseInt(el.getAttribute('data-y')) || 0
-   if(cbs && cbs.onUp) cbs.onUp(e, nx, ny)
-  }
-  el.addEventListener('mousedown', onDown)
-  document.addEventListener('mousemove', onMove)
-  document.addEventListener('mouseup', onUp)
-  el.addEventListener('touchstart', onDown, {passive:false})
-  document.addEventListener('touchmove', onMove, {passive:false})
-  document.addEventListener('touchend', onUp)
-  return {
-   destroy: function(){
-    el.removeEventListener('mousedown', onDown)
-    document.removeEventListener('mousemove', onMove)
-    document.removeEventListener('mouseup', onUp)
-   }
-  }
- }
- function countWords(txt){
-  if(!txt) return 0
-  return txt.trim().split(/\s+/).filter(function(w){ return w.length > 0 }).length
- }
- return {
-  crtEl:crtEl, appndChld:appndChld, clrChld:clrChld, regCss:regCss,
-  pub:pub, sub:sub, saveToStore:saveToStore, loadFromStore:loadFromStore,
-  dragInit:dragInit, cssRgstry:cssRgstry, applyAllCss:applyAllCss,
-  rmCssEntry:rmCssEntry, countWords:countWords
- }
+ function onUp(){ if(!drag) return; drag = false; regCss(el, {zIndex:'1', boxShadow:'0 2px 8px rgba(0,0,0,0.3)'}) }
+ el.addEventListener('mousedown', onDown)
+ document.addEventListener('mousemove', onMove)
+ document.addEventListener('mouseup', onUp)
+ el.addEventListener('touchstart', onDown, {passive:false})
+ document.addEventListener('touchmove', onMove, {passive:false})
+ document.addEventListener('touchend', onUp)
+ return {destroy:()=>{ el.removeEventListener('mousedown', onDown); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) } }
+}
+function countWords(txt){ return txt ? txt.trim().split(/\s+/).filter(w=>w).length : 0 }
+return {crtEl, appndChld, clrChld, regCss, pub, sub, save, load, dragInit, countWords}
 })()
 
-
-const AppPlugins = (function(){
- let toastCont = null
- function showToast(msg, typ){
-  if(!toastCont){
-   toastCont = Utils.crtEl('div','jtw-toast-cont')
-   Utils.regCss(toastCont,{
-    position:'fixed', bottom:'40px', right:'20px',
-    display:'flex', flexDirection:'column', gap:'8px',
-    zIndex:'99999', pointerEvents:'none'
-   })
-   document.body.appendChild(toastCont)
+/* ===== AppPlugins ==================================================== */
+const AppPlugins = (function(U){
+let toastCont = null
+function toast(msg, typ){
+ if(!toastCont){
+  toastCont = U.crtEl('div','jtw-toast-cont')
+  U.regCss(toastCont,{position:'fixed',bottom:'40px',right:'20px',display:'flex',flexDirection:'column',gap:'8px',zIndex:'99999',pointerEvents:'none'})
+  document.body.appendChild(toastCont)
+ }
+ const t = U.crtEl('div','jtw-toast')
+ const colors = {success:{bg:'#0d3d30',border:'#00ccaa',text:'#00e6bb'},error:{bg:'#3d0d0d',border:'#ff5555',text:'#ff7777'},info:{bg:'#0d1f3d',border:'#5588cc',text:'#77aaee'},warning:{bg:'#3d2d0d',border:'#ffaa00',text:'#ffcc44'}}
+ const c = colors[typ] || colors.info
+ U.regCss(t,{padding:'10px 16px',borderRadius:'8px',background:c.bg,border:'1px solid '+c.border,color:c.text,fontSize:'13px',fontFamily:'inherit',boxShadow:'0 4px 12px rgba(0,0,0,0.4)',animation:'jtwSlideIn 0.3s ease',pointerEvents:'auto',maxWidth:'320px',lineHeight:'1.4'})
+ t.textContent = msg
+ toastCont.appendChild(t)
+ setTimeout(()=>{ U.regCss(t,{opacity:'0',transition:'opacity 0.3s ease'}); setTimeout(()=>t.remove(),300) },3000)
+}
+function createCard(ent){
+ const card = U.crtEl('div','jtw-card jtw-card-'+ent.type)
+ U.regCss(card,{position:'relative',display:'flex',flexDirection:'column',gap:'8px',padding:'14px',borderRadius:'10px',borderLeft:'4px solid '+(ent.color||'#00ccaa'),background:'linear-gradient(135deg, #1a1f2e 0%, #151a28 100%)',cursor:'grab',minHeight:'60px',minWidth:'180px',maxWidth:'300px',fontSize:'13px',color:'#e0e4ec',boxShadow:'0 2px 8px rgba(0,0,0,0.3)',userSelect:'none',transition:'box-shadow 0.2s ease, transform 0.1s ease'})
+ const hdr = U.crtEl('div','jtw-card-hdr')
+ U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',gap:'8px'})
+ const icon = U.crtEl('span','jtw-card-icon'); icon.textContent = ent.icon||''
+ U.regCss(icon,{fontSize:'14px'})
+ const ttl = U.crtEl('span','jtw-card-ttl'); ttl.textContent = ent.attrs.name || ent.id
+ U.regCss(ttl,{fontWeight:'600',flex:'1',overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap',fontSize:'14px'})
+ const del = U.crtEl('button','jtw-card-del'); del.textContent = '×'
+ U.regCss(del,{background:'none',border:'none',color:'#556677',cursor:'pointer',fontSize:'18px',padding:'0 4px',lineHeight:'1',transition:'color 0.2s'})
+ del.addEventListener('mouseenter',()=>U.regCss(del,{color:'#ff5555'}))
+ del.addEventListener('mouseleave',()=>U.regCss(del,{color:'#556677'}))
+ U.appndChld(hdr, icon, ttl, del)
+ const badge = U.crtEl('span','jtw-card-type-badge'); badge.textContent = ent.type
+ U.regCss(badge,{display:'inline-block',padding:'1px 6px',borderRadius:'3px',fontSize:'10px',fontWeight:'600',textTransform:'uppercase',letterSpacing:'0.5px',background:(ent.color||'#00ccaa')+'25',color:ent.color||'#00ccaa'})
+ const body = U.crtEl('div','jtw-card-body')
+ U.regCss(body,{display:'flex',flexDirection:'column',gap:'4px',fontSize:'12px',color:'#a0a8b8'})
+ U.appndChld(card, hdr, badge, body)
+ card._id = ent.id; card._del = del; card._body = body; card._ttl = ttl
+ return card
+}
+function parseEAS(txt){
+ const res = [], lines = txt.split('\n')
+ let cur = null, curAttr = null, proseBuf = '', inProse = false
+ lines.forEach(l=>{
+  const ln = l.trim()
+  if(inProse){
+   if(ln === '' && !l.startsWith(' ')){ if(cur && curAttr){ cur.attrs[curAttr] = proseBuf.trim(); curAttr = null } inProse = false; proseBuf = '' } else { proseBuf += l + '\n'; return }
   }
-  const toast = Utils.crtEl('div','jtw-toast')
-  const colors = {
-   success:{bg:'#0d3d30', border:'#00ccaa', text:'#00e6bb'},
-   error:{bg:'#3d0d0d', border:'#ff5555', text:'#ff7777'},
-   info:{bg:'#0d1f3d', border:'#5588cc', text:'#77aaee'},
-   warning:{bg:'#3d2d0d', border:'#ffaa00', text:'#ffcc44'}
+  if(ln.startsWith('@')){
+   if(cur) res.push(cur)
+   const [pfx, ...rest] = ln.split(/\s+/), name = rest.join(' ')
+   cur = {type:pfx, id:name||pfx, attrs:{}}
+   curAttr = null
+  }else if(ln.startsWith('#') || ln.startsWith('!') || ln === ''){
+   /* ignore */
+  }else if(cur && ln.includes(' ')){
+   const sp = ln.indexOf(' '), k = ln.slice(0,sp), v = ln.slice(sp+1).replace(/^"|"$/g,'')
+   if(v === ''){ curAttr = k; inProse = true; proseBuf = '' } else { cur.attrs[k] = v; curAttr = null }
+  }else if(cur){
+   curAttr = ln; inProse = true; proseBuf = ''
   }
-  const c = colors[typ] || colors.info
-  Utils.regCss(toast,{
-   padding:'10px 16px', borderRadius:'8px',
-   background:c.bg, border:'1px solid '+c.border, color:c.text,
-   fontSize:'13px', fontFamily:'inherit',
-   boxShadow:'0 4px 12px rgba(0,0,0,0.4)',
-   animation:'jtwSlideIn 0.3s ease',
-   pointerEvents:'auto', maxWidth:'320px',
-   lineHeight:'1.4'
-  })
-  toast.textContent = msg
-  toastCont.appendChild(toast)
-  setTimeout(function(){
-   Utils.regCss(toast,{opacity:'0', transition:'opacity 0.3s ease'})
-   setTimeout(function(){
-    if(toast.parentNode) toast.parentNode.removeChild(toast)
-   }, 300)
-  }, 3000)
- }
- function createCardBase(ent){
-  const card = Utils.crtEl('div','jtw-card jtw-card-'+ent.type)
-  Utils.regCss(card,{
-   position:'relative', display:'flex', flexDirection:'column',
-   gap:'8px', padding:'14px', borderRadius:'10px',
-   borderLeft:'4px solid '+(ent.color||'#00ccaa'),
-   background:'linear-gradient(135deg, #1a1f2e 0%, #151a28 100%)',
-   cursor:'grab', minHeight:'60px', minWidth:'180px', maxWidth:'300px',
-   fontSize:'13px', color:'#e0e4ec',
-   boxShadow:'0 2px 8px rgba(0,0,0,0.3)',
-   userSelect:'none', transition:'boxShadow 0.2s ease, transform 0.1s ease'
-  })
-  const hdr = Utils.crtEl('div','jtw-card-hdr')
-  Utils.regCss(hdr,{
-   display:'flex', justifyContent:'space-between', alignItems:'center', gap:'8px'
-  })
-  const iconWrap = Utils.crtEl('div','jtw-card-icon-wrap')
-  Utils.regCss(iconWrap,{
-   width:'28px', height:'28px', borderRadius:'6px',
-   display:'flex', alignItems:'center', justifyContent:'center',
-   background:(ent.color||'#00ccaa')+'20', flexShrink:'0'
-  })
-  const icon = Utils.crtEl('span','jtw-card-icon')
-  icon.textContent = ent.icon||''
-  Utils.regCss(icon,{fontSize:'14px'})
-  iconWrap.appendChild(icon)
-  const ttl = Utils.crtEl('span','jtw-card-ttl')
-  ttl.textContent = ent.attrs.name || ent.id
-  Utils.regCss(ttl,{
-   fontWeight:'600', flex:'1', overflow:'hidden',
-   textOverflow:'ellipsis', whiteSpace:'nowrap', fontSize:'14px'
-  })
-  const delBtn = Utils.crtEl('button','jtw-card-del')
-  delBtn.textContent = '\u00d7'
-  Utils.regCss(delBtn,{
-   background:'none', border:'none', color:'#556677',
-   cursor:'pointer', fontSize:'18px', padding:'0 4px',
-   lineHeight:'1', transition:'color 0.2s'
-  })
-  delBtn.addEventListener('mouseenter', function(){ Utils.regCss(delBtn,{color:'#ff5555'}) })
-  delBtn.addEventListener('mouseleave', function(){ Utils.regCss(delBtn,{color:'#556677'}) })
-  Utils.appndChld(hdr, iconWrap, ttl, delBtn)
-  const typeBadge = Utils.crtEl('span','jtw-card-type-badge')
-  typeBadge.textContent = ent.type
-  Utils.regCss(typeBadge,{
-   display:'inline-block', padding:'1px 6px', borderRadius:'3px',
-   fontSize:'10px', fontWeight:'600', textTransform:'uppercase',
-   letterSpacing:'0.5px', background:(ent.color||'#00ccaa')+'25',
-   color:ent.color||'#00ccaa'
-  })
-  const body = Utils.crtEl('div','jtw-card-body')
-  Utils.regCss(body,{
-   display:'flex', flexDirection:'column', gap:'4px', fontSize:'12px', color:'#a0a8b8'
-  })
-  Utils.appndChld(card, hdr, typeBadge, body)
-  card._entId = ent.id
-  card._delBtn = delBtn
-  card._bodyEl = body
-  card._hdrEl = hdr
-  return card
- }
- function parseTextToEntities(txt){
-  const results = []
-  const lines = txt.split('\n')
-  let curEnt = null
-  let curAttr = null
-  let proseBuffer = ''
-  let inProse = false
-  for(let i = 0; i < lines.length; i++){
-   const line = lines[i]
-   const trimmed = line.trim()
-   if(inProse){
-    if(trimmed === '' && i+1 < lines.length && !lines[i+1].trim().startsWith(' ')){
-     if(curEnt && curAttr){
-      curEnt.attrs[curAttr] = proseBuffer.trim()
-      curAttr = null
-     }
-     inProse = false
-     proseBuffer = ''
-    } else {
-     proseBuffer += line + '\n'
-     continue
-    }
-   }
-   if(trimmed.startsWith('@')){
-    if(curEnt) results.push(curEnt)
-    const parts = trimmed.split(/\s+/)
-    const prefix = parts[0]
-    const name = parts.slice(1).join(' ')
-    curEnt = {type:prefix, id:name||prefix, attrs:{}}
-    curAttr = null
-   } else if(trimmed.startsWith('#') || trimmed.startsWith('!') || trimmed === ''){
-    continue
-   } else if(curEnt && trimmed.includes(' ')){
-    const spaceIdx = trimmed.indexOf(' ')
-    const attrKey = trimmed.substring(0, spaceIdx)
-    const attrVal = trimmed.substring(spaceIdx+1).replace(/^"|"$/g,'')
-    if(attrVal === ''){
-     curAttr = attrKey
-     inProse = true
-     proseBuffer = ''
-    } else {
-     curEnt.attrs[attrKey] = attrVal
-     curAttr = null
-    }
-   } else if(curEnt){
-    curAttr = trimmed
-    inProse = true
-    proseBuffer = ''
-   }
-  }
-  if(curEnt) results.push(curEnt)
-  return results
- }
- function drawLink(canvas, srcEl, tgtEl, typ){
-  if(!canvas || !srcEl || !tgtEl) return
-  const ctx = canvas.getContext('2d')
-  if(!ctx) return
-  const srcR = srcEl.getBoundingClientRect()
-  const tgtR = tgtEl.getBoundingClientRect()
-  const cR = canvas.getBoundingClientRect()
-  const sx = srcR.left + srcR.width/2 - cR.left
-  const sy = srcR.top + srcR.height/2 - cR.top
-  const tx = tgtR.left + tgtR.width/2 - cR.left
-  const ty = tgtR.top + tgtR.height/2 - cR.top
-  const cp1x = sx
-  const cp1y = sy + (ty - sy) * 0.4
-  const cp2x = tx
-  const cp2y = ty - (ty - sy) * 0.4
-  ctx.beginPath()
-  ctx.moveTo(sx, sy)
-  ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, tx, ty)
-  const colors = {involves:'#00ccaa',conflict:'#ff5555',thread:'#88ccff',default:'#556677'}
-  ctx.strokeStyle = colors[typ] || colors.default
-  ctx.lineWidth = 2
-  ctx.setLineDash([6,4])
-  ctx.globalAlpha = 0.6
-  ctx.stroke()
-  ctx.globalAlpha = 1
- }
- let modalOverlay = null
- function showModal(content, actions){
-  hideModal()
-  modalOverlay = Utils.crtEl('div','jtw-modal-overlay')
-  Utils.regCss(modalOverlay,{
-   position:'fixed', top:'0', left:'0', width:'100%', height:'100%',
-   background:'rgba(0,0,0,0.7)', display:'flex', alignItems:'center',
-   justifyContent:'center', zIndex:'9999',
-   animation:'jtwFadeIn 0.2s ease'
-  })
-  const modal = Utils.crtEl('div','jtw-modal')
-  Utils.regCss(modal,{
-   background:'linear-gradient(135deg, #1e2436 0%, #151a28 100%)',
-   borderRadius:'14px', padding:'28px', minWidth:'340px', maxWidth:'560px',
-   maxHeight:'80vh', overflowY:'auto',
-   boxShadow:'0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05)',
-   color:'#e0e4ec', animation:'jtwSlideUp 0.3s ease'
-  })
-  if(typeof content === 'string'){
-   const txt = Utils.crtEl('div','jtw-modal-txt')
-   txt.textContent = content
-   Utils.regCss(txt,{marginBottom:'16px', lineHeight:'1.6', whiteSpace:'pre-wrap'})
-   modal.appendChild(txt)
-  } else if(content && content.appendChild){
-   modal.appendChild(content)
-  }
-  if(actions && actions.length){
-   const actRow = Utils.crtEl('div','jtw-modal-acts')
-   Utils.regCss(actRow,{
-    display:'flex', gap:'8px', justifyContent:'flex-end', marginTop:'20px'
-   })
-   for(let i = 0; i < actions.length; i++){
-    const act = actions[i]
-    const btn = Utils.crtEl('button','jtw-modal-act-btn')
-    btn.textContent = act.label
-    Utils.regCss(btn,{
-     padding:'10px 20px', borderRadius:'8px', border:'none', cursor:'pointer',
-     fontSize:'13px', fontWeight:'500',
-     background: act.primary ? 'linear-gradient(135deg, #00ccaa 0%, #00a88a 100%)' : '#2a3040',
-     color: act.primary ? '#0a0e14' : '#e0e4ec',
-     transition:'all 0.2s ease', boxShadow: act.primary ? '0 2px 8px rgba(0,204,170,0.3)' : 'none'
-    })
-    btn.addEventListener('click', act.fn)
-    actRow.appendChild(btn)
-   }
-   modal.appendChild(actRow)
-  }
-  modalOverlay.appendChild(modal)
-  modalOverlay.addEventListener('click', function(e){
-   if(e.target === modalOverlay) hideModal()
-  })
-  document.body.appendChild(modalOverlay)
- }
- function hideModal(){
-  if(modalOverlay && modalOverlay.parentNode) modalOverlay.parentNode.removeChild(modalOverlay)
-  modalOverlay = null
- }
- return {
-  createCardBase:createCardBase, parseTextToEntities:parseTextToEntities,
-  drawLink:drawLink, showModal:showModal, hideModal:hideModal, showToast:showToast
- }
+ })
+ if(cur) res.push(cur)
+ return res
+}
+function modal(content, actions){
+ const ov = U.crtEl('div','jtw-modal-overlay')
+ U.regCss(ov,{position:'fixed',top:0,left:0,width:'100%',height:'100%',background:'rgba(0,0,0,0.7)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:'9999',animation:'jtwFadeIn 0.2s ease'})
+ const m = U.crtEl('div','jtw-modal')
+ U.regCss(m,{background:'linear-gradient(135deg, #1e2436 0%, #151a28 100%)',borderRadius:'14px',padding:'28px',minWidth:'340px',maxWidth:'560px',maxHeight:'80vh',overflowY:'auto',boxShadow:'0 12px 40px rgba(0,0,0,0.6), 0 0 0 1px rgba(255,255,255,0.05)',color:'#e0e4ec',animation:'jtwSlideUp 0.3s ease'})
+ if(typeof content === 'string'){ const t = U.crtEl('div','jtw-modal-txt'); t.textContent = content; U.regCss(t,{marginBottom:'16px',lineHeight:'1.6',whiteSpace:'pre-wrap'}); m.appendChild(t) } else m.appendChild(content)
+ if(actions?.length){ const r = U.crtEl('div','jtw-modal-acts'); U.regCss(r,{display:'flex',gap:'8px',justifyContent:'flex-end',marginTop:'20px'}); actions.forEach(a=>{ const b = U.crtEl('button','jtw-modal-act-btn'); b.textContent = a.label; U.regCss(b,{padding:'10px 20px',borderRadius:'8px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'500',background:a.primary?'linear-gradient(135deg, #00ccaa 0%, #00a88a 100%)':'#2a3040',color:a.primary?'#0a0e14':'#e0e4ec'}); b.addEventListener('click', a.fn); r.appendChild(b) }); m.appendChild(r) }
+ ov.appendChild(m); ov.addEventListener('click', e=>{ if(e.target === ov) ov.remove() }); document.body.appendChild(ov); return ov
+}
+return {createCard, parseEAS, modal, toast}
 })()
 
-
-const JhnTwain = (function(){
- const JhnTwainState = (function(){
-  let data = {
-   seed:{title:'',target:0,theme:'',premise:'',seedTxt:''},
-   entities:new Map(),
-   proseBlks:[],
-   relations:[],
-   harmny:{
-    conductor:{harmony:50,tempo:'steady',openThreads:[]},
-    narrTrain:{momentum:'building',nextBeat:'inciting-incident'},
-    multiverse:{branches:[],violations:[]}
-   }
-  }
-  const listeners = []
-  let history = []
-  let historyIdx = -1
-  const MAX_HISTORY = 50
-  let historyPaused = false
-  function get(path){
-   if(!path) return data
-   const parts = path.split('.')
-   let cur = data
-   for(let i = 0; i < parts.length; i++){
-    if(cur === undefined || cur === null) return undefined
-    cur = cur[parts[i]]
-   }
-   return cur
-  }
-  function set(path, val){
-   const parts = path.split('.')
-   let cur = data
-   for(let i = 0; i < parts.length - 1; i++){
-    if(cur[parts[i]] === undefined) cur[parts[i]] = {}
-    cur = cur[parts[i]]
-   }
-   cur[parts[parts.length-1]] = val
-   notify()
-  }
-  function addEnt(ty, init){
-   const id = ty + '-' + Date.now().toString(36) + Math.random().toString(36).substr(2,4)
-   const ent = {
-    id:id, type:ty,
-    meta:{created:Date.now(),modified:Date.now()},
-    attrs:{name:'', ...init},
-    color: getEntColor(ty), icon: getEntIcon(ty)
-   }
-   data.entities.set(id, ent)
-   notify()
-   return ent
-  }
-  function updEnt(id, changes){
-   const ent = data.entities.get(id)
-   if(!ent) return null
-   if(changes.attrs){
-    const attrKeys = Object.keys(changes.attrs)
-    for(let i = 0; i < attrKeys.length; i++) ent.attrs[attrKeys[i]] = changes.attrs[attrKeys[i]]
-   }
-   ent.meta.modified = Date.now()
-   notify()
-   return ent
-  }
-  function getEntsByTy(ty){
-   const results = []
-   data.entities.forEach(function(ent){ if(ent.type === ty) results.push(ent) })
-   return results
-  }
-  function delEnt(id){
-   data.entities.delete(id)
-   data.relations = data.relations.filter(function(r){ return r.src !== id && r.tgt !== id })
-   notify()
-  }
-  function lnkEnts(srcId, tgtId, lnkTy){
-   data.relations.push({src:srcId, tgt:tgtId, type:lnkTy||'involves'})
-   notify()
-  }
-  function getRels(){ return data.relations }
-  function getEntById(id){ return data.entities.get(id) }
-  function getAllEnts(){
-   const arr = []
-   data.entities.forEach(function(v){ arr.push(v) })
-   return arr
-  }
-  function getEntColor(ty){
-   const colors = {
-    character:'#00ccaa', scene:'#ffaa00', conflict:'#ff5555',
-    research:'#7777ff', storycard:'#cc88ff', thread:'#88ccff',
-    conductor:'#ffff77', narrTrain:'#ff77aa', multiverse:'#aa77ff'
-   }
-   return colors[ty] || '#00ccaa'
-  }
-  function getEntIcon(ty){
-   const icons = {
-    character:'\u{1F464}', scene:'\u{1F4CD}', conflict:'\u2694\uFE0F',
-    research:'\u{1F4DA}', storycard:'\u{1F0CF}', thread:'\u{1F501}',
-    conductor:'\u{1F3BC}', narrTrain:'\u{1F682}', multiverse:'\u{1F30C}'
-   }
-   return icons[ty] || '\u25CF'
-  }
-  function getTotalWordCount(){
-   let total = 0
-   const blks = data.proseBlks
-   for(let i = 0; i < blks.length; i++){
-    total += Utils.countWords(blks[i].text)
-   }
-   total += Utils.countWords(data.seed.seedTxt)
-   return total
-  }
-  function exportData(){
-   return JSON.stringify({
-    seed:data.seed, entities:Array.from(data.entities.entries()),
-    proseBlks:data.proseBlks, relations:data.relations, harmny:data.harmny
-   })
-  }
-  function importData(jsonStr){
-   try{
-    const d = JSON.parse(jsonStr)
-    if(d.seed) data.seed = d.seed
-    if(d.entities) data.entities = new Map(d.entities)
-    if(d.proseBlks) data.proseBlks = d.proseBlks
-    if(d.relations) data.relations = d.relations
-    if(d.harmny) data.harmny = d.harmny
-    notify()
-    return true
-   } catch(e){ return false }
-  }
-  function subscribe(fn){
-   listeners.push(fn)
-   return function(){
-    const idx = listeners.indexOf(fn)
-    if(idx !== -1) listeners.splice(idx,1)
-   }
-  }
-  function pushHistory(){
-   if(historyPaused) return
-   const snapshot = exportData()
-   if(historyIdx < history.length - 1){
-    history = history.slice(0, historyIdx + 1)
-   }
-   history.push(snapshot)
-   if(history.length > MAX_HISTORY){
-    history.shift()
-   }
-   historyIdx = history.length - 1
-  }
-  function undo(){
-   if(historyIdx <= 0) return false
-   historyIdx--
-   historyPaused = true
-   importData(history[historyIdx])
-   historyPaused = false
-   return true
-  }
-  function redo(){
-   if(historyIdx >= history.length - 1) return false
-   historyIdx++
-   historyPaused = true
-   importData(history[historyIdx])
-   historyPaused = false
-   return true
-  }
-  function canUndo(){ return historyIdx > 0 }
-  function canRedo(){ return historyIdx < history.length - 1 }
-  function notify(){
-   pushHistory()
-   for(let i = 0; i < listeners.length; i++) listeners[i](data)
-  }
-  return {
-   get:get, set:set, addEnt:addEnt, updEnt:updEnt,
-   getEntsByTy:getEntsByTy, delEnt:delEnt, lnkEnts:lnkEnts,
-   getRels:getRels, getEntById:getEntById, getAllEnts:getAllEnts,
-   exportData:exportData, importData:importData, subscribe:subscribe,
-   getTotalWordCount:getTotalWordCount,
-   undo:undo, redo:redo, canUndo:canUndo, canRedo:canRedo
-  }
- })()
-
-
- const JhnTwainUIX = (function(U, S){
-  let rootEl = null
-  let activeTab = 'seed'
-  let panels = {}
-  let tabBtns = {}
-  let wrkspCanvas = null
-  let wrkspCardCont = null
-  let seedInps = {}
-  let statusBarEl = null
-  const tabDefs = [
-   {key:'seed', label:'\u{1F331} Seed', shortLabel:'Seed', entTy:null},
-   {key:'prose', label:'\u{270D}\uFE0F Prose', shortLabel:'Prose', entTy:null},
-   {key:'chars', label:'\u{1F464} Chars', shortLabel:'Chars', entTy:'character'},
-   {key:'scenes', label:'\u{1F4CD} Scenes', shortLabel:'Scenes', entTy:'scene'},
-   {key:'conflicts', label:'\u2694\uFE0F Conflict', shortLabel:'Conflict', entTy:'conflict'},
-   {key:'research', label:'\u{1F4DA} Research', shortLabel:'Research', entTy:'research'},
-   {key:'storycards', label:'\u{1F0CF} Cards', shortLabel:'Cards', entTy:'storycard'},
-   {key:'threads', label:'\u{1F501} Threads', shortLabel:'Threads', entTy:'thread'},
-   {key:'wrksp', label:'\u{1F5BC}\uFE0F Wrksp', shortLabel:'Wrksp', entTy:null},
-   {key:'harmny', label:'\u{1F3B6} Harmny', shortLabel:'Harmny', entTy:null},
-   {key:'export', label:'\u{1F4E4} Export', shortLabel:'Export', entTy:null}
-  ]
-  function regAllCss(){
-   const gs = document.getElementById('jtwGlobalStyles')
-   if(!gs) return
-   const sheet = gs.sheet
-   const rules = [
-    ['*',{margin:'0',padding:'0',boxSizing:'border-box'}],
-    ['body',{
-     background:'#0a0e14', color:'#e0e4ec',
-     fontFamily:'"Inter","SF Pro Text","Segoe UI",system-ui,-apple-system,sans-serif',
-     fontSize:'14px', lineHeight:'1.5', overflow:'hidden', height:'100vh', width:'100vw'
-    }],
-    ['#root',{display:'flex',flexDirection:'column',height:'100vh',width:'100vw',overflow:'hidden'}],
-    ['.jtw-hdr',{
-     display:'flex', alignItems:'center', justifyContent:'space-between',
-     padding:'12px 24px',
-     background:'linear-gradient(180deg, #141a28 0%, #111620 100%)',
-     borderBottom:'1px solid #1e2536', flexShrink:'0'
-    }],
-    ['.jtw-hdr-brand',{display:'flex',alignItems:'center',gap:'12px'}],
-    ['.jtw-hdr-logo',{
-     width:'32px', height:'32px', borderRadius:'8px',
-     background:'linear-gradient(135deg, #00ccaa 0%, #008877 100%)',
-     display:'flex', alignItems:'center', justifyContent:'center',
-     fontSize:'16px', fontWeight:'800', color:'#0a0e14',
-     boxShadow:'0 2px 8px rgba(0,204,170,0.3)'
-    }],
-    ['.jtw-hdr-ttl',{fontSize:'18px',fontWeight:'700',color:'#e0e4ec',letterSpacing:'0.5px'}],
-    ['.jtw-hdr-ver',{fontSize:'11px',color:'#556677',marginLeft:'4px',fontWeight:'400'}],
-    ['.jtw-hdr-acts',{display:'flex',gap:'8px',alignItems:'center'}],
-    ['.jtw-wc-badge',{
-     display:'flex', alignItems:'center', gap:'6px',
-     padding:'6px 12px', borderRadius:'8px',
-     background:'#0d1f1a', border:'1px solid #1a3d30',
-     fontSize:'12px', color:'#00ccaa', fontWeight:'600'
-    }],
-    ['.jtw-wc-bar',{width:'60px',height:'4px',background:'#1a3d30',borderRadius:'2px',overflow:'hidden'}],
-    ['.jtw-wc-fill',{height:'100%',background:'#00ccaa',borderRadius:'2px',transition:'width 0.5s ease'}],
-    ['.jtw-tab-bar',{
-     display:'flex', overflowX:'auto',
-     background:'#0c1018', borderBottom:'1px solid #1e2536',
-     flexShrink:'0', scrollbarWidth:'none',
-     paddingLeft:'8px', paddingRight:'8px'
-    }],
-    ['.jtw-tab-bar::-webkit-scrollbar',{display:'none'}],
-    ['.jtw-tab-btn',{
-     padding:'12px 14px', fontSize:'13px', color:'#556677',
-     background:'none', border:'none', borderBottom:'2px solid transparent',
-     cursor:'pointer', whiteSpace:'nowrap', transition:'all 0.2s ease',
-     fontWeight:'500', position:'relative', display:'flex', alignItems:'center', gap:'4px'
-    }],
-    ['.jtw-tab-btn:hover',{color:'#a0c0d0',background:'rgba(255,255,255,0.02)'}],
-    ['.jtw-tab-btn.active',{color:'#00ccaa',borderBottomColor:'#00ccaa',background:'rgba(0,204,170,0.04)'}],
-    ['.jtw-tab-badge',{
-     display:'inline-flex',alignItems:'center',justifyContent:'center',
-     minWidth:'16px',height:'16px',padding:'0 4px',borderRadius:'8px',
-     fontSize:'10px',fontWeight:'700',background:'#1e2536',color:'#778899',
-     lineHeight:'1'
-    }],
-    ['.jtw-tab-btn.active .jtw-tab-badge',{background:'#0a2a22',color:'#00ccaa'}],
-    ['.jtw-pnl',{
-     flex:'1', overflowY:'auto', padding:'24px', maxWidth:'100%',
-     scrollbarWidth:'thin', scrollbarColor:'#1e2536 transparent'
-    }],
-    ['.jtw-pnl::-webkit-scrollbar',{width:'6px'}],
-    ['.jtw-pnl::-webkit-scrollbar-track',{background:'transparent'}],
-    ['.jtw-pnl::-webkit-scrollbar-thumb',{background:'#1e2536',borderRadius:'3px'}],
-    ['.jtw-pnl.hidden',{display:'none'}],
-    ['.jtw-pnl-fadein',{animation:'jtwTabFadeIn 0.25s ease'}],
-    ['.jtw-lbl',{
-     display:'block', fontSize:'11px', color:'#778899',
-     textTransform:'uppercase', letterSpacing:'1px', marginBottom:'6px',
-     fontWeight:'600'
-    }],
-    ['.jtw-inp',{
-     width:'100%', padding:'10px 14px',
-     background:'#0c1018', border:'1px solid #1e2536',
-     borderRadius:'8px', color:'#e0e4ec', fontSize:'13px',
-     fontFamily:'inherit', outline:'none', transition:'all 0.2s'
-    }],
-    ['.jtw-inp:focus',{borderColor:'#00ccaa',boxShadow:'0 0 0 3px rgba(0,204,170,0.1)'}],
-    ['.jtw-inp::placeholder',{color:'#334155'}],
-    ['.jtw-txa',{
-     width:'100%', padding:'12px 14px',
-     background:'#0c1018', border:'1px solid #1e2536',
-     borderRadius:'8px', color:'#e0e4ec', fontSize:'13px',
-     fontFamily:'inherit', outline:'none', resize:'vertical',
-     minHeight:'120px', lineHeight:'1.7', transition:'all 0.2s'
-    }],
-    ['.jtw-txa:focus',{borderColor:'#00ccaa',boxShadow:'0 0 0 3px rgba(0,204,170,0.1)'}],
-    ['.jtw-txa::placeholder',{color:'#334155'}],
-    ['.jtw-btn',{
-     padding:'10px 18px', borderRadius:'8px', border:'none',
-     cursor:'pointer', fontSize:'13px', fontWeight:'600',
-     transition:'all 0.2s ease', letterSpacing:'0.3px'
-    }],
-    ['.jtw-btn-pri',{
-     background:'linear-gradient(135deg, #00ccaa 0%, #00a88a 100%)',
-     color:'#0a0e14', boxShadow:'0 2px 8px rgba(0,204,170,0.25)'
-    }],
-    ['.jtw-btn-pri:hover',{background:'linear-gradient(135deg, #00e6bb 0%, #00ccaa 100%)',boxShadow:'0 4px 12px rgba(0,204,170,0.35)'}],
-    ['.jtw-btn-sec',{background:'#1e2536',color:'#c0c8d8',border:'1px solid #2a3448'}],
-    ['.jtw-btn-sec:hover',{background:'#2a3448',borderColor:'#3a4458'}],
-    ['.jtw-btn-dng',{background:'rgba(255,85,85,0.15)',color:'#ff5555',border:'1px solid rgba(255,85,85,0.3)'}],
-    ['.jtw-btn-dng:hover',{background:'rgba(255,85,85,0.25)'}],
-    ['.jtw-btn-icon',{padding:'8px 10px',minWidth:'36px',display:'flex',alignItems:'center',justifyContent:'center'}],
-    ['.jtw-field',{marginBottom:'18px'}],
-    ['.jtw-grid',{
-     display:'grid', gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))', gap:'16px'
-    }],
-    ['.jtw-card:hover',{boxShadow:'0 4px 16px rgba(0,204,170,0.15)',transform:'translateY(-1px)'}],
-    ['.jtw-card-attr-row',{
-     display:'flex',gap:'4px',alignItems:'center',fontSize:'12px',
-     padding:'2px 4px',borderRadius:'4px',transition:'background 0.15s ease',
-     cursor:'pointer',position:'relative'
-    }],
-    ['.jtw-card-attr-row:hover',{background:'rgba(255,255,255,0.03)'}],
-    ['.jtw-card-attr-key',{color:'#667788',flexShrink:'0',minWidth:'70px',fontSize:'11px'}],
-    ['.jtw-card-attr-val',{color:'#c0c8d8',wordBreak:'break-word',flex:'1'}],
-    ['.jtw-card-attr-edit-icon',{
-     fontSize:'12px',color:'#445566',opacity:'0',transition:'opacity 0.15s ease',
-     marginLeft:'4px',flexShrink:'0'
-    }],
-    ['.jtw-card-attr-row:hover .jtw-card-attr-edit-icon',{opacity:'1'}],
-    ['.jtw-card-type-badge',{
-     display:'inline-block', padding:'1px 6px', borderRadius:'3px',
-     fontSize:'10px', fontWeight:'600', textTransform:'uppercase',
-     letterSpacing:'0.5px', alignSelf:'flex-start'
-    }],
-    ['.jtw-wrksp',{position:'relative',flex:'1',background:'#080c12',overflow:'hidden',display:'flex',flexDirection:'column'}],
-    ['.jtw-wrksp-toolbar',{
-     display:'flex', gap:'8px', padding:'10px 14px',
-     background:'#0c1018', borderBottom:'1px solid #1e2536',
-     position:'relative', zIndex:'2', alignItems:'center',
-     flexShrink:'0'
-    }],
-    ['.jtw-wrksp-canvas',{position:'absolute',top:'0',left:'0',width:'100%',height:'100%',pointerEvents:'none'}],
-    ['.jtw-wrksp-cards',{position:'absolute',top:'0',left:'0',width:'100%',height:'100%'}],
-    ['.jtw-mtr',{display:'flex',alignItems:'center',gap:'12px',padding:'14px',background:'#0c1018',borderRadius:'10px',border:'1px solid #1e2536'}],
-    ['.jtw-mtr-bar',{flex:'1',height:'8px',background:'#1e2536',borderRadius:'4px',overflow:'hidden'}],
-    ['.jtw-mtr-fill',{height:'100%',borderRadius:'4px',transition:'width 0.5s ease'}],
-    ['.jtw-mtr-lbl',{fontSize:'12px',color:'#778899',minWidth:'90px'}],
-    ['.jtw-mtr-val',{fontSize:'12px',color:'#e0e4ec',fontWeight:'600',minWidth:'32px',textAlign:'right'}],
-    ['.jtw-section-ttl',{
-     fontSize:'16px', fontWeight:'700', color:'#e0e4ec',
-     marginBottom:'14px', paddingBottom:'10px',
-     borderBottom:'1px solid #1e2536', letterSpacing:'0.3px'
-    }],
-    ['.jtw-section-subttl',{fontSize:'13px',color:'#778899',marginBottom:'16px',fontWeight:'400'}],
-    ['.jtw-row',{display:'flex',gap:'12px',flexWrap:'wrap'}],
-    ['.jtw-badge',{display:'inline-block',padding:'3px 10px',borderRadius:'6px',fontSize:'11px',fontWeight:'600'}],
-    ['.jtw-empty',{
-     textAlign:'center', padding:'48px 24px', color:'#445566', fontSize:'14px',
-     display:'flex', flexDirection:'column', alignItems:'center', gap:'12px'
-    }],
-    ['.jtw-empty-icon',{fontSize:'40px',opacity:'0.4'}],
-    ['.jtw-empty-txt',{fontSize:'14px',color:'#556677'}],
-    ['.jtw-empty-sub',{fontSize:'12px',color:'#334455'}],
-    ['.jtw-prose-blk',{
-     padding:'14px', background:'#0c1018', borderRadius:'10px',
-     border:'1px solid #1e2536', marginBottom:'12px',
-     transition:'border-color 0.2s'
-    }],
-    ['.jtw-prose-blk:focus-within',{borderColor:'#00ccaa'}],
-    ['.jtw-prose-blk-txa',{
-     width:'100%', background:'transparent', border:'none',
-     color:'#d0d4dc', fontSize:'15px',
-     fontFamily:'"Merriweather","Georgia","Times New Roman",serif',
-     lineHeight:'1.9', resize:'none', minHeight:'100px', outline:'none',
-     overflow:'hidden'
-    }],
-    ['.jtw-prose-blk-txa::placeholder',{color:'#2a3448'}],
-    ['.jtw-manuscript',{
-     maxWidth:'680px', margin:'0 auto', padding:'24px 48px',
-     background:'#0c1018', borderRadius:'10px',
-     fontFamily:'"Merriweather","Georgia","Times New Roman",serif',
-     fontSize:'17px', lineHeight:'2', color:'#d0d4dc', whiteSpace:'pre-wrap'
-    }],
-    ['.jtw-harmny-grid',{
-     display:'grid', gridTemplateColumns:'repeat(auto-fit, minmax(280px, 1fr))',
-     gap:'12px', marginBottom:'16px'
-    }],
-    ['.jtw-harmny-card',{
-     padding:'14px', borderRadius:'12px', border:'1px solid #1e2536',
-     background:'linear-gradient(135deg, #0f1520 0%, #0c1018 100%)'
-    }],
-    ['.jtw-harmny-card-ttl',{fontSize:'14px',fontWeight:'700',marginBottom:'12px',display:'flex',alignItems:'center',gap:'8px'}],
-    ['.jtw-kbd',{
-     display:'inline-block', padding:'2px 6px', borderRadius:'4px',
-     background:'#1e2536', color:'#778899', fontSize:'11px',
-     border:'1px solid #2a3448', fontFamily:'monospace'
-    }],
-    ['.jtw-pnl-sep',{height:'1px',background:'#1e2536',margin:'20px 0'}],
-    ['.jtw-seed-hero',{
-     padding:'24px', borderRadius:'12px',
-     background:'linear-gradient(135deg, #0d1f1a 0%, #0c1018 100%)',
-     border:'1px solid #1a3d30', marginBottom:'20px'
-    }],
-    ['.jtw-seed-hero-ttl',{fontSize:'22px',fontWeight:'700',color:'#00ccaa',marginBottom:'4px'}],
-    ['.jtw-seed-hero-sub',{fontSize:'13px',color:'#557766'}],
-    ['.jtw-sym-bar',{
-     width:'8px',height:'24px',borderRadius:'3px',flexShrink:'0',
-     transition:'background 0.3s ease'
-    }],
-    ['.jtw-sym-inp-wrap',{display:'flex',alignItems:'center',gap:'6px',flex:'1'}],
-    ['.jtw-status-bar',{
-     display:'flex',alignItems:'center',justifyContent:'space-between',
-     padding:'0 16px',height:'24px',background:'#080c12',
-     borderTop:'1px solid #1e2536',flexShrink:'0',
-     fontSize:'11px',color:'#445566'
-    }],
-    ['.jtw-status-left',{display:'flex',gap:'16px',alignItems:'center'}],
-    ['.jtw-status-right',{display:'flex',gap:'12px',alignItems:'center'}],
-    ['.jtw-status-sep',{color:'#1e2536'}],
-    ['.jtw-mtr-glow',{animation:'jtwGlowPulse 1.5s ease-in-out infinite'}],
-    ['.jtw-del-confirm',{
-     fontSize:'11px',color:'#ff5555',padding:'4px 10px',
-     background:'rgba(255,85,85,0.15)',border:'1px solid rgba(255,85,85,0.3)',
-     borderRadius:'6px',cursor:'pointer',fontWeight:'600'
-    }],
-    ['.jtw-link-select',{
-     width:'100%',padding:'6px 10px',background:'#0c1018',
-     border:'1px solid #1e2536',borderRadius:'6px',color:'#e0e4ec',
-     fontSize:'11px',fontFamily:'inherit',outline:'none',flex:'1'
-    }],
-    ['@keyframes jtwSlideIn',{from:{transform:'translateX(100px)',opacity:'0'},to:{transform:'translateX(0)',opacity:'1'}}],
-    ['@keyframes jtwFadeIn',{from:{opacity:'0'},to:{opacity:'1'}}],
-    ['@keyframes jtwSlideUp',{from:{transform:'translateY(20px)',opacity:'0'},to:{transform:'translateY(0)',opacity:'1'}}],
-    ['@keyframes jtwTabFadeIn',{from:{opacity:'0',transform:'translateY(4px)'},to:{opacity:'1',transform:'translateY(0)'}}],
-    ['@keyframes jtwGlowPulse',{
-     '0%,100%':{boxShadow:'0 0 4px rgba(255,85,85,0.3)'},
-     '50%':{boxShadow:'0 0 12px rgba(255,85,85,0.6)'}
-    }],
-    ['.jtw-progress-ring',{display:'flex',alignItems:'center',gap:'8px'}]
-   ]
-   for(let i = 0; i < rules.length; i++){
-    try{
-     sheet.insertRule(rules[i][0]+'{}', sheet.cssRules.length)
-     const rule = sheet.cssRules[sheet.cssRules.length - 1]
-     const props = rules[i][1]
-     const propKeys = Object.keys(props)
-     for(let j = 0; j < propKeys.length; j++) rule.style[propKeys[j]] = props[propKeys[j]]
-    } catch(e){}
-   }
-  }
-  function buildHeader(){
-   const hdr = U.crtEl('div','jtw-hdr')
-   const brand = U.crtEl('div','jtw-hdr-brand')
-   const logo = U.crtEl('div','jtw-hdr-logo')
-   logo.textContent = 'Jt'
-   const ttlWrap = U.crtEl('div','')
-   const ttl = U.crtEl('span','jtw-hdr-ttl')
-   ttl.textContent = 'JhnTwain'
-   const ver = U.crtEl('span','jtw-hdr-ver')
-   ver.textContent = 'v0.0.01'
-   U.appndChld(ttlWrap, ttl, ver)
-   U.appndChld(brand, logo, ttlWrap)
-   const acts = U.crtEl('div','jtw-hdr-acts')
-   const wcBadge = U.crtEl('div','jtw-wc-badge')
-   const wcBar = U.crtEl('div','jtw-wc-bar')
-   const wcFill = U.crtEl('div','jtw-wc-fill')
-   Utils.regCss(wcFill,{width:'0%',background:'#00ccaa'})
-   wcBar.appendChild(wcFill)
-   const wcTxt = U.crtEl('span','')
-   wcTxt.textContent = '0 / 5000'
-   U.appndChld(wcBadge, wcTxt, wcBar)
-   const undoBtn = U.crtEl('button','jtw-btn jtw-btn-sec jtw-btn-icon')
-   undoBtn.textContent = '\u21A9'
-   undoBtn.title = 'Undo (Ctrl+Z)'
-   undoBtn.addEventListener('click', function(){
-    if(S.undo()){
-     AppPlugins.showToast('Undone', 'info')
-     refreshAll()
-    }
-   })
-   const redoBtn = U.crtEl('button','jtw-btn jtw-btn-sec jtw-btn-icon')
-   redoBtn.textContent = '\u21AA'
-   redoBtn.title = 'Redo (Ctrl+Shift+Z)'
-   redoBtn.addEventListener('click', function(){
-    if(S.redo()){
-     AppPlugins.showToast('Redone', 'info')
-     refreshAll()
-    }
-   })
-   hdr._undoBtn = undoBtn
-   hdr._redoBtn = redoBtn
-   const saveBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   saveBtn.textContent = '\u{1F4BE} Save'
-   saveBtn.addEventListener('click', function(){
-    JhnTwainCore.autoSave()
-    AppPlugins.showToast('Project saved!', 'success')
-   })
-   const msBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   msBtn.textContent = '\u{1F4D6} Manuscript'
-   msBtn.addEventListener('click', function(){ showManuscriptView() })
-   U.appndChld(acts, wcBadge, undoBtn, redoBtn, saveBtn, msBtn)
-   U.appndChld(hdr, brand, acts)
-   hdr._wcFill = wcFill
-   hdr._wcTxt = wcTxt
-   return hdr
-  }
-  function updateWordCount(hdrEl){
-   if(!hdrEl) return
-   const wc = S.getTotalWordCount()
-   const target = S.get('seed.target') || 5000
-   const pct = Math.min(100, Math.round((wc / target) * 100))
-   if(hdrEl._wcFill) Utils.regCss(hdrEl._wcFill, {width:pct+'%'})
-   if(hdrEl._wcTxt) hdrEl._wcTxt.textContent = wc+' / '+target
-   if(hdrEl._undoBtn){
-    hdrEl._undoBtn.disabled = !S.canUndo()
-    Utils.regCss(hdrEl._undoBtn,{opacity: S.canUndo()?'1':'0.4'})
-   }
-   if(hdrEl._redoBtn){
-    hdrEl._redoBtn.disabled = !S.canRedo()
-    Utils.regCss(hdrEl._redoBtn,{opacity: S.canRedo()?'1':'0.4'})
-   }
-  }
-  function buildTabBar(){
-   const bar = U.crtEl('div','jtw-tab-bar')
-   for(let i = 0; i < tabDefs.length; i++){
-    const td = tabDefs[i]
-    const btn = U.crtEl('button','jtw-tab-btn')
-    const lblSpan = U.crtEl('span','')
-    lblSpan.textContent = td.label
-    btn.appendChild(lblSpan)
-    if(td.entTy){
-     const badge = U.crtEl('span','jtw-tab-badge')
-     badge.textContent = '0'
-     badge._entTy = td.entTy
-     btn.appendChild(badge)
-    }
-    if(td.key === activeTab) btn.classList.add('active')
-    btn.addEventListener('click', function(){ switchTab(td.key) })
-    bar.appendChild(btn)
-    tabBtns[td.key] = btn
-   }
-   return bar
-  }
-  function updateTabBadges(){
-   const btnKeys = Object.keys(tabBtns)
-   for(let i = 0; i < btnKeys.length; i++){
-    const btn = tabBtns[btnKeys[i]]
-    if(!btn) continue
-    const badges = btn.querySelectorAll('.jtw-tab-badge')
-    for(let j = 0; j < badges.length; j++){
-     const badge = badges[j]
-     if(badge._entTy){
-      const count = S.getEntsByTy(badge._entTy).length
-      badge.textContent = String(count)
-     }
-    }
-   }
-  }
-  function switchTab(key){
-   activeTab = key
-   const panelKeys = Object.keys(panels)
-   for(let i = 0; i < panelKeys.length; i++){
-    if(panels[panelKeys[i]]){
-     if(panelKeys[i] === key){
-      panels[panelKeys[i]].classList.remove('hidden')
-      panels[panelKeys[i]].classList.remove('jtw-pnl-fadein')
-      void panels[panelKeys[i]].offsetWidth
-      panels[panelKeys[i]].classList.add('jtw-pnl-fadein')
-     } else {
-      panels[panelKeys[i]].classList.add('hidden')
-     }
-    }
-   }
-   const btnKeys = Object.keys(tabBtns)
-   for(let i = 0; i < btnKeys.length; i++){
-    if(btnKeys[i] === key) tabBtns[btnKeys[i]].classList.add('active')
-    else tabBtns[btnKeys[i]].classList.remove('active')
-   }
-   if(key === 'wrksp') renderWorkspace()
-   if(key === 'harmny') renderHarmny()
-   if(key === 'seed') renderSeedPnl()
-   if(key === 'prose') renderProseBlocks()
-   if(key === 'chars') renderEntityPanel('character')
-   if(key === 'scenes') renderEntityPanel('scene')
-   if(key === 'conflicts') renderEntityPanel('conflict')
-   if(key === 'research') renderEntityPanel('research')
-   if(key === 'storycards') renderEntityPanel('storycard')
-   if(key === 'threads') renderEntityPanel('thread')
-   updateStatusBar()
-  }
-  function buildSeedPnl(){
-   const pnl = U.crtEl('div','jtw-pnl')
-   pnl._isSeedPnl = true
-   return pnl
-  }
-  function renderSeedPnl(){
-   const pnl = panels.seed
-   if(!pnl) return
-   U.clrChld(pnl)
-   const seed = S.get('seed')
-   const hero = U.crtEl('div','jtw-seed-hero')
-   const heroTtl = U.crtEl('div','jtw-seed-hero-ttl')
-   heroTtl.textContent = seed.title || 'Untitled Story'
-   const heroSub = U.crtEl('div','jtw-seed-hero-sub')
-   const wc = S.getTotalWordCount()
-   const target = seed.target || 5000
-   heroSub.textContent = wc+' words of '+target+' target \u00b7 '+(seed.theme||'No theme set')
-   U.appndChld(hero, heroTtl, heroSub)
-   pnl.appendChild(hero)
-   const ttlFld = U.crtEl('div','jtw-field')
-   const ttlLbl = U.crtEl('label','jtw-lbl')
-   ttlLbl.textContent = 'Story Title'
-   const ttlInp = U.crtEl('input','jtw-inp')
-   ttlInp.type = 'text'
-   ttlInp.value = seed.title || ''
-   ttlInp.placeholder = 'Give your story a name...'
-   ttlInp.addEventListener('input', function(){ S.set('seed.title', ttlInp.value) })
-   U.appndChld(ttlFld, ttlLbl, ttlInp)
-   const tgtFld = U.crtEl('div','jtw-field')
-   const tgtLbl = U.crtEl('label','jtw-lbl')
-   tgtLbl.textContent = 'Target Word Count'
-   const tgtInp = U.crtEl('input','jtw-inp')
-   tgtInp.type = 'number'
-   tgtInp.value = seed.target || 5000
-   tgtInp.addEventListener('input', function(){ S.set('seed.target', parseInt(tgtInp.value)||0) })
-   U.appndChld(tgtFld, tgtLbl, tgtInp)
-   const thmFld = U.crtEl('div','jtw-field')
-   const thmLbl = U.crtEl('label','jtw-lbl')
-   thmLbl.textContent = 'Theme(s)'
-   const thmInp = U.crtEl('input','jtw-inp')
-   thmInp.type = 'text'
-   thmInp.value = seed.theme || ''
-   thmInp.placeholder = 'e.g. loneliness, letting-go, redemption'
-   thmInp.addEventListener('input', function(){ S.set('seed.theme', thmInp.value) })
-   U.appndChld(thmFld, thmLbl, thmInp)
-   const prmsFld = U.crtEl('div','jtw-field')
-   const prmsLbl = U.crtEl('label','jtw-lbl')
-   prmsLbl.textContent = 'Premise'
-   const prmsTxa = U.crtEl('textarea','jtw-txa')
-   prmsTxa.value = seed.premise || ''
-   prmsTxa.placeholder = 'Your story premise in a sentence or two...'
-   prmsTxa.style.minHeight = '80px'
-   prmsTxa.addEventListener('input', function(){
-    S.set('seed.premise', prmsTxa.value)
-    autoGrowTextarea(prmsTxa)
-   })
-   U.appndChld(prmsFld, prmsLbl, prmsTxa)
-   const sdFld = U.crtEl('div','jtw-field')
-   const sdLbl = U.crtEl('label','jtw-lbl')
-   sdLbl.textContent = 'Seed Text'
-   const sdTxa = U.crtEl('textarea','jtw-txa')
-   sdTxa.value = seed.seedTxt || ''
-   sdTxa.placeholder = 'Free-write your story seed here...'
-   sdTxa.style.minHeight = '180px'
-   sdTxa.addEventListener('input', function(){
-    S.set('seed.seedTxt', sdTxa.value)
-    autoGrowTextarea(sdTxa)
-   })
-   U.appndChld(sdFld, sdLbl, sdTxa)
-   U.appndChld(pnl, ttlFld, tgtFld, thmFld, prmsFld, sdFld)
-  }
-  function autoGrowTextarea(txa){
-   txa.style.height = 'auto'
-   txa.style.height = txa.scrollHeight + 'px'
-  }
-  function buildProsePnl(){
-   const pnl = U.crtEl('div','jtw-pnl')
-   const hdr = U.crtEl('div','')
-   U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'})
-   const ttl = U.crtEl('span','jtw-section-ttl')
-   ttl.textContent = 'Prose Blocks'
-   ttl.style.borderBottom = 'none'
-   ttl.style.marginBottom = '0'
-   const addBtn = U.crtEl('button','jtw-btn jtw-btn-pri')
-   addBtn.textContent = '+ Add Block'
-   addBtn.addEventListener('click', function(){
-    S.get('proseBlks').push({id:'blk-'+Date.now().toString(36),text:'',symphony:{distance:'',chord:''}})
-    renderProseBlocks()
-    AppPlugins.showToast('New prose block added', 'success')
-   })
-   U.appndChld(hdr, ttl, addBtn)
-   const cont = U.crtEl('div','jtw-prose-cont')
-   U.appndChld(pnl, hdr, cont)
-   pnl._contEl = cont
-   return pnl
-  }
-  function getSymphonyDistanceColor(val){
-   if(!val) return '#556677'
-   const v = val.toLowerCase()
-   if(v.indexOf('close') !== -1) return '#00ccaa'
-   if(v.indexOf('medium') !== -1) return '#ffaa00'
-   if(v.indexOf('far') !== -1) return '#ff5555'
-   return '#556677'
-  }
-  function getSymphonyChordColor(val){
-   if(!val) return '#556677'
-   const v = val.toLowerCase()
-   if(v.indexOf('longing') !== -1) return '#7777ff'
-   if(v.indexOf('tension') !== -1) return '#ff5555'
-   if(v.indexOf('peace') !== -1) return '#00ccaa'
-   if(v.indexOf('hope') !== -1) return '#ffaa00'
-   return '#556677'
-  }
-  function renderProseBlocks(){
-   const pnl = panels.prose
-   if(!pnl || !pnl._contEl) return
-   U.clrChld(pnl._contEl)
-   const blks = S.get('proseBlks')
-   if(!blks || !blks.length){
-    const empty = U.crtEl('div','jtw-empty')
-    const eicon = U.crtEl('div','jtw-empty-icon')
-    eicon.textContent = '\u{270D}\uFE0F'
-    const etxt = U.crtEl('div','jtw-empty-txt')
-    etxt.textContent = 'No prose blocks yet'
-    const esub = U.crtEl('div','jtw-empty-sub')
-    esub.textContent = 'Click + Add Block to start writing your story'
-    U.appndChld(empty, eicon, etxt, esub)
-    pnl._contEl.appendChild(empty)
-    return
-   }
-   for(let i = 0; i < blks.length; i++){
-    const blk = blks[i]
-    const blkEl = U.crtEl('div','jtw-prose-blk')
-    const blkHdr = U.crtEl('div','')
-    U.regCss(blkHdr,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'})
-    const blkLeft = U.crtEl('div','')
-    U.regCss(blkLeft,{display:'flex',alignItems:'center',gap:'8px'})
-    const blkLbl = U.crtEl('span','')
-    blkLbl.textContent = 'Block '+(i+1)
-    U.regCss(blkLbl,{fontSize:'12px',color:'#778899',fontWeight:'600'})
-    const wcSpan = U.crtEl('span','')
-    wcSpan.textContent = Utils.countWords(blk.text)+' words'
-    U.regCss(wcSpan,{fontSize:'11px',color:'#445566'})
-    U.appndChld(blkLeft, blkLbl, wcSpan)
-    const blkDel = U.crtEl('button','jtw-btn jtw-btn-dng')
-    blkDel.textContent = 'Del'
-    blkDel.style.fontSize = '11px'
-    blkDel.style.padding = '4px 10px'
-    ;(function(idx){
-     let deleteConfirmed = false
-     let confirmTimer = null
-     blkDel.addEventListener('click', function(){
-      if(!deleteConfirmed){
-       deleteConfirmed = true
-       blkDel.textContent = 'Sure?'
-       confirmTimer = setTimeout(function(){
-        deleteConfirmed = false
-        blkDel.textContent = 'Del'
-       }, 3000)
-      } else {
-       clearTimeout(confirmTimer)
-       S.get('proseBlks').splice(idx,1)
-       renderProseBlocks()
-       AppPlugins.showToast('Prose block deleted', 'warning')
-      }
-     })
-    })(i)
-    U.appndChld(blkHdr, blkLeft, blkDel)
-    const txa = U.crtEl('textarea','jtw-prose-blk-txa')
-    txa.value = blk.text || ''
-    txa.placeholder = 'Write your prose here...'
-    ;(function(b){
-     txa.addEventListener('input', function(){
-      b.text = txa.value
-      wcSpan.textContent = Utils.countWords(b.text)+' words'
-      autoGrowTextarea(txa)
-     })
-    })(blk)
-    const symRow = U.crtEl('div','jtw-row')
-    symRow.style.marginTop = '10px'
-    const distWrap = U.crtEl('div','jtw-sym-inp-wrap')
-    const distBar = U.crtEl('div','jtw-sym-bar')
-    Utils.regCss(distBar,{background:getSymphonyDistanceColor(blk.symphony?blk.symphony.distance:'')})
-    const distInp = U.crtEl('input','jtw-inp')
-    distInp.placeholder = '\u{1F4CF} Distance (close/medium/far)'
-    distInp.value = blk.symphony ? blk.symphony.distance : ''
-    distInp.style.flex = '1'
-    ;(function(b){
-     distInp.addEventListener('input', function(){
-      if(!b.symphony) b.symphony = {}
-      b.symphony.distance = distInp.value
-      Utils.regCss(distBar,{background:getSymphonyDistanceColor(distInp.value)})
-     })
-    })(blk)
-    U.appndChld(distWrap, distBar, distInp)
-    const chrdWrap = U.crtEl('div','jtw-sym-inp-wrap')
-    const chrdBar = U.crtEl('div','jtw-sym-bar')
-    Utils.regCss(chrdBar,{background:getSymphonyChordColor(blk.symphony?blk.symphony.chord:'')})
-    const chrdInp = U.crtEl('input','jtw-inp')
-    chrdInp.placeholder = '\u{1F3B5} Chord (longing/tension/peace)'
-    chrdInp.value = blk.symphony ? blk.symphony.chord : ''
-    chrdInp.style.flex = '1'
-    ;(function(b){
-     chrdInp.addEventListener('input', function(){
-      if(!b.symphony) b.symphony = {}
-      b.symphony.chord = chrdInp.value
-      Utils.regCss(chrdBar,{background:getSymphonyChordColor(chrdInp.value)})
-     })
-    })(blk)
-    U.appndChld(chrdWrap, chrdBar, chrdInp)
-    U.appndChld(symRow, distWrap, chrdWrap)
-    U.appndChld(blkEl, blkHdr, txa, symRow)
-    pnl._contEl.appendChild(blkEl)
-    setTimeout(function(){ autoGrowTextarea(txa) }, 10)
-   }
-  }
-  function buildEntityPnl(ty, ttl, icon, desc){
-   const pnl = U.crtEl('div','jtw-pnl')
-   const hdr = U.crtEl('div','')
-   U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'})
-   const left = U.crtEl('div','')
-   const ttlEl = U.crtEl('span','jtw-section-ttl')
-   ttlEl.textContent = icon+' '+ttl
-   ttlEl.style.borderBottom = 'none'
-   ttlEl.style.marginBottom = '0'
-   const sub = U.crtEl('div','jtw-section-subttl')
-   sub.textContent = desc||''
-   U.appndChld(left, ttlEl, sub)
-   const addBtn = U.crtEl('button','jtw-btn jtw-btn-pri')
-   addBtn.textContent = '+ Add'
-   addBtn.addEventListener('click', function(){
-    const defaults = {
-     character:{name:'New Character',aspect:'Undefined aspect'},
-     scene:{name:'New Scene',time:'opening'},
-     conflict:{name:'New Conflict',type:'character-vs-self',magnitude:'medium',state:'active'},
-     research:{name:'New Research',topic:'',notes:''},
-     storycard:{name:'New Card',content:'',attachedTo:'',type:'strength'},
-     thread:{name:'New Thread',motif:'',appearsIn:''}
-    }
-    S.addEnt(ty, defaults[ty] || {name:'New '+ty})
-    renderEntityPanel(ty)
-    updateTabBadges()
-    AppPlugins.showToast(ttl.slice(0,-1)+' created!', 'success')
-   })
-   U.appndChld(hdr, left, addBtn)
-   const cont = U.crtEl('div','jtw-grid')
-   U.appndChld(pnl, hdr, cont)
-   pnl._contEl = cont
-   pnl._entTy = ty
-   return pnl
-  }
-  function renderEntityPanel(ty){
-   const keyMap = {character:'chars',scene:'scenes',conflict:'conflicts',research:'research',storycard:'storycards',thread:'threads'}
-   const pnl = panels[keyMap[ty]]
-   if(!pnl || !pnl._contEl) return
-   U.clrChld(pnl._contEl)
-   const ents = S.getEntsByTy(ty)
-   if(!ents.length){
-    const empty = U.crtEl('div','jtw-empty')
-    const eicon = U.crtEl('div','jtw-empty-icon')
-    const iconMap = {character:'\u{1F464}',scene:'\u{1F4CD}',conflict:'\u2694\uFE0F',research:'\u{1F4DA}',storycard:'\u{1F0CF}',thread:'\u{1F501}'}
-    eicon.textContent = iconMap[ty]||'\u25CF'
-    const etxt = U.crtEl('div','jtw-empty-txt')
-    etxt.textContent = 'No '+ty+' entities yet'
-    const esub = U.crtEl('div','jtw-empty-sub')
-    esub.textContent = 'Click + Add to create one'
-    U.appndChld(empty, eicon, etxt, esub)
-    pnl._contEl.appendChild(empty)
-    return
-   }
-   for(let i = 0; i < ents.length; i++){
-    const card = renderEntityCard(ents[i])
-    pnl._contEl.appendChild(card)
-   }
-  }
-  function makeInlineEditable(row, vEl, ent, key){
-   const editIcon = U.crtEl('span','jtw-card-attr-edit-icon')
-   editIcon.textContent = '\u270E'
-   row.appendChild(editIcon)
-   function startEdit(){
-    const currentVal = ent.attrs[key] || ''
-    const inp = U.crtEl('input','jtw-inp')
-    inp.value = currentVal
-    inp.style.fontSize = '12px'
-    inp.style.padding = '2px 6px'
-    inp.style.minWidth = '60px'
-    row.replaceChild(inp, vEl)
-    inp.focus()
-    inp.select()
-    function saveEdit(){
-     ent.attrs[key] = inp.value
-     ent.meta.modified = Date.now()
-     vEl.textContent = inp.value
-     if(row.parentNode){
-      try{ row.replaceChild(vEl, inp) } catch(e){}
-     }
-     row.appendChild(editIcon)
-    }
-    function cancelEdit(){
-     if(row.parentNode){
-      try{ row.replaceChild(vEl, inp) } catch(e){}
-     }
-     row.appendChild(editIcon)
-    }
-    inp.addEventListener('blur', saveEdit)
-    inp.addEventListener('keydown', function(e){
-     if(e.key === 'Enter'){
-      e.preventDefault()
-      inp.blur()
-     } else if(e.key === 'Escape'){
-      inp.removeEventListener('blur', saveEdit)
-      cancelEdit()
-     }
-    })
-   }
-   vEl.addEventListener('click', function(e){
-    e.stopPropagation()
-    startEdit()
-   })
-  }
-  function renderEntityCard(ent){
-   const card = AppPlugins.createCardBase(ent)
-   const body = card._bodyEl
-   const attrKeys = Object.keys(ent.attrs)
-   for(let i = 0; i < attrKeys.length; i++){
-    const key = attrKeys[i]
-    const val = ent.attrs[key]
-    if(key === 'name') continue
-    const row = U.crtEl('div','jtw-card-attr-row')
-    const kEl = U.crtEl('span','jtw-card-attr-key')
-    kEl.textContent = key+':'
-    const vEl = U.crtEl('span','jtw-card-attr-val')
-    vEl.textContent = val
-    U.appndChld(row, kEl, vEl)
-    makeInlineEditable(row, vEl, ent, key)
-    body.appendChild(row)
-   }
-   const addAttrRow = U.crtEl('div','jtw-row')
-   addAttrRow.style.marginTop = '8px'
-   const newKeyInp = U.crtEl('input','jtw-inp')
-   newKeyInp.placeholder = 'attr name'
-   newKeyInp.style.flex = '1'
-   newKeyInp.style.fontSize = '11px'
-   const newValInp = U.crtEl('input','jtw-inp')
-   newValInp.placeholder = 'value'
-   newValInp.style.flex = '1'
-   newValInp.style.fontSize = '11px'
-   const addAttrBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   addAttrBtn.textContent = '+'
-   addAttrBtn.style.padding = '6px 10px'
-   addAttrBtn.style.fontSize = '11px'
-   ;(function(eid, kinp, vinp){
-    addAttrBtn.addEventListener('click', function(){
-     const k = kinp.value.trim()
-     const v = vinp.value.trim()
-     if(k){
-      const e = S.getEntById(eid)
-      if(e){
-       e.attrs[k] = v
-       e.meta.modified = Date.now()
-       refreshAll()
-       AppPlugins.showToast('Attribute "'+k+'" added', 'success')
-      }
-     }
-    })
-   })(ent.id, newKeyInp, newValInp)
-   U.appndChld(addAttrRow, newKeyInp, newValInp, addAttrBtn)
-   body.appendChild(addAttrRow)
-   const lnkRow = U.crtEl('div','jtw-row')
-   lnkRow.style.marginTop = '4px'
-   const lnkSel = U.crtEl('select','jtw-link-select')
-   const placeholderOpt = U.crtEl('option','')
-   placeholderOpt.value = ''
-   placeholderOpt.textContent = 'Select entity to link...'
-   lnkSel.appendChild(placeholderOpt)
-   const allEnts = S.getAllEnts()
-   for(let i = 0; i < allEnts.length; i++){
-    const e = allEnts[i]
-    if(e.id === ent.id) continue
-    const opt = U.crtEl('option','')
-    opt.value = e.id
-    opt.textContent = (e.attrs.name || e.id) + ' (' + e.type + ')'
-    lnkSel.appendChild(opt)
-   }
-   const lnkBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   lnkBtn.textContent = 'Link'
-   lnkBtn.style.padding = '6px 10px'
-   lnkBtn.style.fontSize = '11px'
-   ;(function(eid, sel){
-    lnkBtn.addEventListener('click', function(){
-     const tgtId = sel.value
-     if(tgtId && S.getEntById(tgtId)){
-      S.lnkEnts(eid, tgtId, 'involves')
-      U.pub('entityLinked', {src:eid, tgt:tgtId})
-      AppPlugins.showToast('Entities linked!', 'success')
-     } else {
-      AppPlugins.showToast('Please select an entity to link', 'warning')
-     }
-    })
-   })(ent.id, lnkSel)
-   U.appndChld(lnkRow, lnkSel, lnkBtn)
-   body.appendChild(lnkRow)
-   let deleteConfirmed = false
-   let confirmTimer = null
-   card._delBtn.addEventListener('click', function(e){
-    e.stopPropagation()
-    if(!deleteConfirmed){
-     deleteConfirmed = true
-     card._delBtn.textContent = 'Sure?'
-     Utils.regCss(card._delBtn,{fontSize:'12px',color:'#ff5555',fontWeight:'600'})
-     confirmTimer = setTimeout(function(){
-      deleteConfirmed = false
-      card._delBtn.textContent = '\u00d7'
-      Utils.regCss(card._delBtn,{fontSize:'18px',color:'#556677',fontWeight:'normal'})
-     }, 3000)
-    } else {
-     clearTimeout(confirmTimer)
-     S.delEnt(card._entId)
-     refreshAll()
-     AppPlugins.showToast('Entity deleted', 'warning')
-    }
-   })
-   const nameInp = card._hdrEl.querySelector('.jtw-card-ttl')
-   nameInp.contentEditable = 'true'
-   Utils.regCss(nameInp,{
-    outline:'none', cursor:'text',
-    borderBottom:'1px dashed #2a3448', padding:'0 2px'
-   })
-   nameInp.addEventListener('blur', function(){
-    const e = S.getEntById(card._entId)
-    if(e){
-     e.attrs.name = nameInp.textContent
-     e.meta.modified = Date.now()
-    }
-   })
-   nameInp.addEventListener('click', function(e){ e.stopPropagation() })
-   return card
-  }
-  function buildWrkspPnl(){
-   const pnl = U.crtEl('div','jtw-wrksp')
-   const toolbar = U.crtEl('div','jtw-wrksp-toolbar')
-   const addCharBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   addCharBtn.textContent = '\u{1F464} Char'
-   addCharBtn.addEventListener('click', function(){ addEntityToWorkspace('character',{name:'New Character'}) })
-   const addSceneBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   addSceneBtn.textContent = '\u{1F4CD} Scene'
-   addSceneBtn.addEventListener('click', function(){ addEntityToWorkspace('scene',{name:'New Scene'}) })
-   const addConfBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   addConfBtn.textContent = '\u2694\uFE0F Conflict'
-   addConfBtn.addEventListener('click', function(){ addEntityToWorkspace('conflict',{name:'New Conflict'}) })
-   const addResBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   addResBtn.textContent = '\u{1F4DA} Research'
-   addResBtn.addEventListener('click', function(){ addEntityToWorkspace('research',{name:'New Research'}) })
-   const spacer = U.crtEl('div','')
-   spacer.style.flex = '1'
-   const refreshBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   refreshBtn.textContent = '\u21BB Refresh'
-   refreshBtn.addEventListener('click', function(){ renderWorkspace() })
-   U.appndChld(toolbar, addCharBtn, addSceneBtn, addConfBtn, addResBtn, spacer, refreshBtn)
-   const canvasCont = U.crtEl('div','')
-   U.regCss(canvasCont,{position:'relative',flex:'1',overflow:'hidden',background:'radial-gradient(circle at 50% 50%, #0d1220 0%, #080c12 100%)'})
-   const canvas = U.crtEl('canvas','jtw-wrksp-canvas')
-   const cardCont = U.crtEl('div','jtw-wrksp-cards')
-   U.appndChld(canvasCont, canvas, cardCont)
-   U.appndChld(pnl, toolbar, canvasCont)
-   wrkspCanvas = canvas
-   wrkspCardCont = cardCont
-   return pnl
-  }
-  let wrkspCardPos = {}
-  function addEntityToWorkspace(ty, init){
-   S.addEnt(ty, init)
-   renderWorkspace()
-   AppPlugins.showToast(ty+' added to workspace', 'success')
-  }
-  function renderWorkspace(){
-   if(!wrkspCanvas || !wrkspCardCont) return
-   U.clrChld(wrkspCardCont)
-   const ents = S.getAllEnts()
-   if(!ents.length){
-    const empty = U.crtEl('div','jtw-empty')
-    U.regCss(empty,{position:'absolute',top:'50%',left:'50%',transform:'translate(-50%,-50%)'})
-    const eicon = U.crtEl('div','jtw-empty-icon')
-    eicon.textContent = '\u{1F5BC}\uFE0F'
-    const etxt = U.crtEl('div','jtw-empty-txt')
-    etxt.textContent = 'Workspace is empty'
-    const esub = U.crtEl('div','jtw-empty-sub')
-    esub.textContent = 'Add entities using the toolbar above'
-    U.appndChld(empty, eicon, etxt, esub)
-    wrkspCardCont.appendChild(empty)
-    return
-   }
-   for(let i = 0; i < ents.length; i++){
-    const ent = ents[i]
-    const card = AppPlugins.createCardBase(ent)
-    if(!wrkspCardPos[ent.id]){
-     const cols = Math.ceil(Math.sqrt(ents.length))
-     const row = Math.floor(i / cols)
-     const col = i % cols
-     wrkspCardPos[ent.id] = {x: col * 320 + 24, y: row * 220 + 24}
-    }
-    const pos = wrkspCardPos[ent.id]
-    card.setAttribute('data-x', pos.x)
-    card.setAttribute('data-y', pos.y)
-    U.regCss(card, {
-     position:'absolute', transform:'translate('+pos.x+'px,'+pos.y+'px)'
-    })
-    const body = card._bodyEl
-    const attrKeys = Object.keys(ent.attrs)
-    let shown = 0
-    for(let j = 0; j < attrKeys.length; j++){
-     const key = attrKeys[j]
-     if(key === 'name') continue
-     const row = U.crtEl('div','jtw-card-attr-row')
-     const k = U.crtEl('span','jtw-card-attr-key')
-     k.textContent = key+':'
-     const v = U.crtEl('span','jtw-card-attr-val')
-     v.textContent = ent.attrs[key]
-     U.appndChld(row, k, v)
-     body.appendChild(row)
-     shown++
-     if(shown > 4) break
-    }
-    if(attrKeys.length > 5){
-     const more = U.crtEl('div','')
-     more.textContent = '+'+(attrKeys.length - 5)+' more...'
-     U.regCss(more,{fontSize:'11px',color:'#445566',fontStyle:'italic'})
-     body.appendChild(more)
-    }
-    let deleteConfirmed = false
-    let confirmTimer = null
-    card._delBtn.addEventListener('click', function(e){
-     e.stopPropagation()
-     if(!deleteConfirmed){
-      deleteConfirmed = true
-      card._delBtn.textContent = 'Sure?'
-      confirmTimer = setTimeout(function(){
-       deleteConfirmed = false
-       card._delBtn.textContent = '\u00d7'
-      }, 3000)
-     } else {
-      clearTimeout(confirmTimer)
-      S.delEnt(card._entId)
-      delete wrkspCardPos[card._entId]
-      renderWorkspace()
-     }
-    })
-    ;(function(eid){
-     U.dragInit(card, {
-      onMove: function(e, nx, ny){
-       wrkspCardPos[eid] = {x:nx, y:ny}
-       drawWorkspaceLinks()
-      },
-      onUp: function(){ drawWorkspaceLinks() }
-     })
-    })(ent.id)
-    wrkspCardCont.appendChild(card)
-   }
-   setTimeout(drawWorkspaceLinks, 50)
-  }
-  function drawWorkspaceLinks(){
-   if(!wrkspCanvas) return
-   const cont = wrkspCardCont
-   wrkspCanvas.width = cont.offsetWidth
-   wrkspCanvas.height = cont.offsetHeight
-   const rels = S.getRels()
-   for(let i = 0; i < rels.length; i++){
-    const r = rels[i]
-    const srcCard = cont.querySelector('[data-ent-id="'+r.src+'"]')
-    const tgtCard = cont.querySelector('[data-ent-id="'+r.tgt+'"]')
-    if(srcCard && tgtCard) AppPlugins.drawLink(wrkspCanvas, srcCard, tgtCard, r.type)
-   }
-  }
-  function buildHarmnyPnl(){
-   const pnl = U.crtEl('div','jtw-pnl')
-   return pnl
-  }
-  function renderHarmny(){
-   const pnl = panels.harmny
-   if(!pnl) return
-   U.clrChld(pnl)
-   const harmny = S.get('harmny')
-   const grid = U.crtEl('div','jtw-harmny-grid')
-   const condCard = U.crtEl('div','jtw-harmny-card')
-   const condTtl = U.crtEl('div','jtw-harmny-card-ttl')
-   condTtl.textContent = '\u{1F3BC} Conductor'
-   U.regCss(condTtl,{color:'#ffff77'})
-   const condMtr = U.crtEl('div','jtw-mtr')
-   const condLbl = U.crtEl('span','jtw-mtr-lbl')
-   condLbl.textContent = 'Harmony'
-   const condBar = U.crtEl('div','jtw-mtr-bar')
-   const condFill = U.crtEl('div','jtw-mtr-fill')
-   const hv = harmny.conductor.harmony || 50
-   const isLowHarmony = hv < 30
-   U.regCss(condFill,{
-    width: hv+'%',
-    background: hv > 70 ? 'linear-gradient(90deg, #00ccaa, #00e6bb)' : hv > 40 ? 'linear-gradient(90deg, #ffaa00, #ffcc44)' : 'linear-gradient(90deg, #ff5555, #ff7777)'
-   })
-   if(isLowHarmony) condFill.classList.add('jtw-mtr-glow')
-   condBar.appendChild(condFill)
-   const condVal = U.crtEl('span','jtw-mtr-val')
-   condVal.textContent = hv+'%'
-   U.appndChld(condMtr, condLbl, condBar, condVal)
-   const tempoRow = U.crtEl('div','jtw-row')
-   tempoRow.style.marginTop = '10px'
-   const tempoLbl = U.crtEl('span','jtw-lbl')
-   tempoLbl.textContent = 'Tempo'
-   tempoLbl.style.marginBottom = '0'
-   const tempoVal = U.crtEl('span','jtw-badge')
-   tempoVal.textContent = harmny.conductor.tempo || 'steady'
-   U.regCss(tempoVal,{background:'#2d2810',color:'#ffaa00'})
-   U.appndChld(tempoRow, tempoLbl, tempoVal)
-   const threadsFld = U.crtEl('div','jtw-field')
-   threadsFld.style.marginTop = '10px'
-   const threadsLbl = U.crtEl('label','jtw-lbl')
-   threadsLbl.textContent = 'Open Threads'
-   const threadsTxt = U.crtEl('div','')
-   const ot = harmny.conductor.openThreads
-   if(ot && ot.length){
-    for(let i = 0; i < ot.length; i++){
-     const t = U.crtEl('span','jtw-badge')
-     t.textContent = ot[i]
-     U.regCss(t,{background:'#102838',color:'#88ccff',marginRight:'4px',marginBottom:'4px'})
-     threadsTxt.appendChild(t)
-    }
-   } else {
-    threadsTxt.textContent = 'None'
-    U.regCss(threadsTxt,{color:'#445566',fontSize:'13px'})
-   }
-   U.appndChld(threadsFld, threadsLbl, threadsTxt)
-   U.appndChld(condCard, condTtl, condMtr, tempoRow, threadsFld)
-   const trainCard = U.crtEl('div','jtw-harmny-card')
-   const trainTtl = U.crtEl('div','jtw-harmny-card-ttl')
-   trainTtl.textContent = '\u{1F682} Narrative Train'
-   U.regCss(trainTtl,{color:'#ff77aa'})
-   const momRow = U.crtEl('div','jtw-row')
-   const momLbl = U.crtEl('span','jtw-lbl')
-   momLbl.textContent = 'Momentum'
-   momLbl.style.marginBottom = '0'
-   const momVal = U.crtEl('span','jtw-badge')
-   momVal.textContent = harmny.narrTrain.momentum || 'building'
-   const momColor = {building:'#ffaa00',cruising:'#00ccaa',rushing:'#ff5555',stalled:'#7777ff'}
-   U.regCss(momVal,{background:'#1e1520',color:momColor[harmny.narrTrain.momentum]||'#ffaa00'})
-   U.appndChld(momRow, momLbl, momVal)
-   const beatRow = U.crtEl('div','jtw-row')
-   beatRow.style.marginTop = '10px'
-   const beatLbl = U.crtEl('span','jtw-lbl')
-   beatLbl.textContent = 'Next Beat'
-   beatLbl.style.marginBottom = '0'
-   const beatVal = U.crtEl('span','jtw-badge')
-   beatVal.textContent = harmny.narrTrain.nextBeat || 'inciting-incident'
-   U.regCss(beatVal,{background:'#1a1030',color:'#cc88ff'})
-   U.appndChld(beatRow, beatLbl, beatVal)
-   U.appndChld(trainCard, trainTtl, momRow, beatRow)
-   const mvCard = U.crtEl('div','jtw-harmny-card')
-   const mvTtl = U.crtEl('div','jtw-harmny-card-ttl')
-   mvTtl.textContent = '\u{1F30C} Multiverse'
-   U.regCss(mvTtl,{color:'#aa77ff'})
-   const violFld = U.crtEl('div','jtw-field')
-   const violLbl = U.crtEl('label','jtw-lbl')
-   violLbl.textContent = 'Consistency Violations'
-   const violTxt = U.crtEl('div','')
-   const viols = harmny.multiverse.violations
-   if(viols && viols.length){
-    for(let i = 0; i < viols.length; i++){
-     const v = U.crtEl('span','jtw-badge')
-     v.textContent = viols[i]
-     U.regCss(v,{background:'#2a1520',color:'#ff5555',marginRight:'4px',marginBottom:'4px'})
-     violTxt.appendChild(v)
-    }
-   } else {
-    violTxt.textContent = '\u2713 No violations detected'
-    U.regCss(violTxt,{color:'#00ccaa',fontSize:'13px'})
-   }
-   U.appndChld(violFld, violLbl, violTxt)
-   const brnchFld = U.crtEl('div','jtw-field')
-   brnchFld.style.marginTop = '10px'
-   const brnchLbl = U.crtEl('label','jtw-lbl')
-   brnchLbl.textContent = 'Active Branches'
-   const brnchTxt = U.crtEl('div','')
-   const branches = harmny.multiverse.branches
-   if(branches && branches.length){
-    for(let i = 0; i < branches.length; i++){
-     const b = U.crtEl('span','jtw-badge')
-     b.textContent = branches[i]
-     U.regCss(b,{background:'#1a1030',color:'#aa77ff',marginRight:'4px',marginBottom:'4px'})
-     brnchTxt.appendChild(b)
-    }
-   } else {
-    brnchTxt.textContent = 'No branches'
-    U.regCss(brnchTxt,{color:'#445566',fontSize:'13px'})
-   }
-   U.appndChld(brnchFld, brnchLbl, brnchTxt)
-   U.appndChld(mvCard, mvTtl, violFld, brnchFld)
-   U.appndChld(grid, condCard, trainCard, mvCard)
-   const editRow = U.crtEl('div','jtw-row')
-   const editCondBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   editCondBtn.textContent = '\u270E Edit Conductor'
-   editCondBtn.addEventListener('click', function(){ showConductorEditor() })
-   const editTrainBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   editTrainBtn.textContent = '\u270E Edit Train'
-   editTrainBtn.addEventListener('click', function(){ showTrainEditor() })
-   const checkBtn = U.crtEl('button','jtw-btn jtw-btn-pri')
-   checkBtn.textContent = '\u{1F50D} Check Consistency'
-   checkBtn.addEventListener('click', function(){ HarmonyLayer.checkConsistency() })
-   const suggestBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   suggestBtn.textContent = '\u{1F4A1} Suggest Next'
-   suggestBtn.addEventListener('click', function(){
-    const suggestion = HarmonyLayer.suggestNext()
-    AppPlugins.showModal(suggestion, [{label:'Got it', primary:true, fn:AppPlugins.hideModal}])
-   })
-   U.appndChld(editRow, editCondBtn, editTrainBtn, checkBtn, suggestBtn)
-   U.appndChld(pnl, grid, editRow)
-  }
-  function showConductorEditor(){
-   const harmny = S.get('harmny')
-   const form = U.crtEl('div','')
-   const hvFld = U.crtEl('div','jtw-field')
-   const hvLbl = U.crtEl('label','jtw-lbl')
-   hvLbl.textContent = 'Harmony Score (0-100)'
-   const hvInp = U.crtEl('input','jtw-inp')
-   hvInp.type = 'number'
-   hvInp.min = '0'
-   hvInp.max = '100'
-   hvInp.value = harmny.conductor.harmony
-   U.appndChld(hvFld, hvLbl, hvInp)
-   const tmpFld = U.crtEl('div','jtw-field')
-   const tmpLbl = U.crtEl('label','jtw-lbl')
-   tmpLbl.textContent = 'Tempo'
-   const tmpSel = U.crtEl('select','jtw-inp')
-   const tempos = ['steady','building','cruising','rushing','stalled']
-   for(let i = 0; i < tempos.length; i++){
-    const opt = U.crtEl('option','')
-    opt.value = tempos[i]
-    opt.textContent = tempos[i]
-    if(tempos[i] === harmny.conductor.tempo) opt.selected = true
-    tmpSel.appendChild(opt)
-   }
-   U.appndChld(tmpFld, tmpLbl, tmpSel)
-   U.appndChld(form, hvFld, tmpFld)
-   AppPlugins.showModal(form, [
-    {label:'Cancel', fn: AppPlugins.hideModal},
-    {label:'Save', primary:true, fn: function(){
-     S.set('harmny.conductor.harmony', parseInt(hvInp.value)||50)
-     S.set('harmny.conductor.tempo', tmpSel.value)
-     AppPlugins.hideModal()
-     renderHarmny()
-     AppPlugins.showToast('Conductor updated', 'success')
-    }}
-   ])
-  }
-  function showTrainEditor(){
-   const harmny = S.get('harmny')
-   const form = U.crtEl('div','')
-   const momFld = U.crtEl('div','jtw-field')
-   const momLbl = U.crtEl('label','jtw-lbl')
-   momLbl.textContent = 'Momentum'
-   const momSel = U.crtEl('select','jtw-inp')
-   const momenta = ['building','cruising','rushing','stalled']
-   for(let i = 0; i < momenta.length; i++){
-    const opt = U.crtEl('option','')
-    opt.value = momenta[i]
-    opt.textContent = momenta[i]
-    if(momenta[i] === harmny.narrTrain.momentum) opt.selected = true
-    momSel.appendChild(opt)
-   }
-   U.appndChld(momFld, momLbl, momSel)
-   const beatFld = U.crtEl('div','jtw-field')
-   const beatLbl = U.crtEl('label','jtw-lbl')
-   beatLbl.textContent = 'Next Beat'
-   const beatInp = U.crtEl('input','jtw-inp')
-   beatInp.value = harmny.narrTrain.nextBeat || ''
-   U.appndChld(beatFld, beatLbl, beatInp)
-   U.appndChld(form, momFld, beatFld)
-   AppPlugins.showModal(form, [
-    {label:'Cancel', fn: AppPlugins.hideModal},
-    {label:'Save', primary:true, fn: function(){
-     S.set('harmny.narrTrain.momentum', momSel.value)
-     S.set('harmny.narrTrain.nextBeat', beatInp.value)
-     AppPlugins.hideModal()
-     renderHarmny()
-     AppPlugins.showToast('Train updated', 'success')
-    }}
-   ])
-  }
-  function buildExportPnl(){
-   const pnl = U.crtEl('div','jtw-pnl')
-   const colWrap = U.crtEl('div','')
-   U.regCss(colWrap,{maxWidth:'800px'})
-   const easTtl = U.crtEl('div','jtw-section-ttl')
-   easTtl.textContent = '\u{1F4C4} Export Entity Attribute Stream'
-   const easBtn = U.crtEl('button','jtw-btn jtw-btn-pri')
-   easBtn.textContent = 'Generate EAS'
-   easBtn.style.marginBottom = '12px'
-   easBtn.addEventListener('click', function(){
-    const eas = ExportMgr.exportEAS()
-    const txa = pnl._easOut
-    if(txa) txa.value = eas
-    AppPlugins.showToast('EAS generated!', 'success')
-   })
-   const easOut = U.crtEl('textarea','jtw-txa')
-   easOut.readOnly = true
-   easOut.style.minHeight = '200px'
-   easOut.style.fontFamily = '"SF Mono","Cascadia Code",monospace'
-   easOut.style.fontSize = '12px'
-   pnl._easOut = easOut
-   const sep1 = U.crtEl('div','jtw-pnl-sep')
-   const msTtl = U.crtEl('div','jtw-section-ttl')
-   msTtl.textContent = '\u{1F4D6} Export Manuscript'
-   const msBtn = U.crtEl('button','jtw-btn jtw-btn-pri')
-   msBtn.textContent = 'Generate Manuscript'
-   msBtn.style.marginBottom = '12px'
-   msBtn.addEventListener('click', function(){
-    const ms = ExportMgr.exportManuscript()
-    const txa = pnl._msOut
-    if(txa) txa.value = ms
-    AppPlugins.showToast('Manuscript generated!', 'success')
-   })
-   const msOut = U.crtEl('textarea','jtw-txa')
-   msOut.readOnly = true
-   msOut.style.minHeight = '200px'
-   msOut.style.fontFamily = '"Merriweather","Georgia",serif'
-   msOut.style.fontSize = '14px'
-   pnl._msOut = msOut
-   const sep2 = U.crtEl('div','jtw-pnl-sep')
-   const impTtl = U.crtEl('div','jtw-section-ttl')
-   impTtl.textContent = '\u{1F4E5} Import EAS'
-   const impTxa = U.crtEl('textarea','jtw-txa')
-   impTxa.style.minHeight = '120px'
-   impTxa.style.fontFamily = '"SF Mono","Cascadia Code",monospace'
-   impTxa.style.fontSize = '12px'
-   impTxa.placeholder = 'Paste EAS text here...'
-   const impBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   impBtn.textContent = 'Import EAS'
-   impBtn.style.marginTop = '8px'
-   impBtn.addEventListener('click', function(){
-    const txt = impTxa.value
-    if(txt){
-     const parsed = AppPlugins.parseTextToEntities(txt)
-     for(let i = 0; i < parsed.length; i++){
-      const p = parsed[i]
-      const ty = p.type.replace('@','')
-      S.addEnt(ty, p.attrs)
-     }
-     refreshAll()
-     AppPlugins.showToast('Imported '+parsed.length+' entities!', 'success')
-    }
-   })
-   const sep3 = U.crtEl('div','jtw-pnl-sep')
-   const stTtl = U.crtEl('div','jtw-section-ttl')
-   stTtl.textContent = '\u{1F4BE} Browser Storage'
-   const stRow = U.crtEl('div','jtw-row')
-   const saveBtn = U.crtEl('button','jtw-btn jtw-btn-pri')
-   saveBtn.textContent = '\u{1F4BE} Save to Browser'
-   saveBtn.addEventListener('click', function(){
-    JhnTwainCore.autoSave()
-    AppPlugins.showToast('Project saved to browser!', 'success')
-   })
-   const loadBtn = U.crtEl('button','jtw-btn jtw-btn-sec')
-   loadBtn.textContent = '\u{1F4C2} Load from Browser'
-   loadBtn.addEventListener('click', function(){
-    const d = U.loadFromStore('project')
-    if(d){
-     S.importData(d)
-     refreshAll()
-     AppPlugins.showToast('Project loaded!', 'success')
-    } else {
-     AppPlugins.showToast('No saved project found', 'error')
-    }
-   })
-   const clearBtn = U.crtEl('button','jtw-btn jtw-btn-dng')
-   clearBtn.textContent = '\u{1F5D1} Clear Storage'
-   clearBtn.addEventListener('click', function(){
-    try{ localStorage.removeItem('jtw_project') } catch(e){}
-    AppPlugins.showToast('Storage cleared', 'warning')
-   })
-   U.appndChld(stRow, saveBtn, loadBtn, clearBtn)
-   U.appndChld(colWrap, easTtl, easBtn, easOut, sep1, msTtl, msBtn, msOut,
-    sep2, impTtl, impTxa, impBtn, sep3, stTtl, stRow)
-   pnl.appendChild(colWrap)
-   return pnl
-  }
-  function showManuscriptView(){
-   const ms = ExportMgr.exportManuscript()
-   const cont = U.crtEl('div','jtw-manuscript')
-   cont.textContent = ms
-   AppPlugins.showModal(cont, [{label:'Close', primary:true, fn:AppPlugins.hideModal}])
-  }
-  function updateStatusBar(){
-   if(!statusBarEl) return
-   const entCount = S.getAllEnts().length
-   const relCount = S.getRels().length
-   const leftEl = statusBarEl.querySelector('.jtw-status-left')
-   const rightEl = statusBarEl.querySelector('.jtw-status-right')
-   if(leftEl){
-    U.clrChld(leftEl)
-    const entSpan = U.crtEl('span','')
-    entSpan.textContent = 'Entities: '+entCount
-    const sep1 = U.crtEl('span','jtw-status-sep')
-    sep1.textContent = '|'
-    const relSpan = U.crtEl('span','')
-    relSpan.textContent = 'Relations: '+relCount
-    const sep2 = U.crtEl('span','jtw-status-sep')
-    sep2.textContent = '|'
-    let tabName = activeTab
-    for(let i = 0; i < tabDefs.length; i++){
-     if(tabDefs[i].key === activeTab){ tabName = tabDefs[i].shortLabel; break }
-    }
-    const tabSpan = U.crtEl('span','')
-    tabSpan.textContent = 'Tab: '+tabName
-    U.appndChld(leftEl, entSpan, sep1, relSpan, sep2, tabSpan)
-   }
-   if(rightEl){
-    U.clrChld(rightEl)
-    const s1 = U.crtEl('span','jtw-kbd')
-    s1.textContent = 'Ctrl+S'
-    const s1l = U.crtEl('span','')
-    s1l.textContent = 'Save'
-    const sep1 = U.crtEl('span','jtw-status-sep')
-    sep1.textContent = '|'
-    const s2 = U.crtEl('span','jtw-kbd')
-    s2.textContent = 'Ctrl+Z'
-    const s2l = U.crtEl('span','')
-    s2l.textContent = 'Undo'
-    const sep2 = U.crtEl('span','jtw-status-sep')
-    sep2.textContent = '|'
-    const s3 = U.crtEl('span','jtw-kbd')
-    s3.textContent = 'Ctrl+Shift+Z'
-    const s3l = U.crtEl('span','')
-    s3l.textContent = 'Redo'
-    U.appndChld(rightEl, s1, s1l, sep1, s2, s2l, sep2, s3, s3l)
-   }
-  }
-  function buildStatusBar(){
-   statusBarEl = U.crtEl('div','jtw-status-bar')
-   const left = U.crtEl('div','jtw-status-left')
-   const right = U.crtEl('div','jtw-status-right')
-   U.appndChld(statusBarEl, left, right)
-   return statusBarEl
-  }
-  function refreshAll(){
-   renderProseBlocks()
-   renderEntityPanel('character')
-   renderEntityPanel('scene')
-   renderEntityPanel('conflict')
-   renderEntityPanel('research')
-   renderEntityPanel('storycard')
-   renderEntityPanel('thread')
-   if(activeTab === 'wrksp') renderWorkspace()
-   if(activeTab === 'harmny') renderHarmny()
-   if(activeTab === 'seed') renderSeedPnl()
-   if(rootEl && rootEl._hdrEl) updateWordCount(rootEl._hdrEl)
-   updateTabBadges()
-   updateStatusBar()
-  }
-  function buildUI(){
-   rootEl = document.getElementById('root')
-   if(!rootEl) return
-   U.clrChld(rootEl)
-   regAllCss()
-   const hdr = buildHeader()
-   rootEl._hdrEl = hdr
-   const tabBar = buildTabBar()
-   const mainCont = U.crtEl('div','')
-   U.regCss(mainCont,{flex:'1',display:'flex',flexDirection:'column',overflow:'hidden'})
-   panels.seed = buildSeedPnl()
-   panels.prose = buildProsePnl()
-   panels.chars = buildEntityPnl('character','Characters','\u{1F464}','Define characters with aspects, strengths, and weaknesses')
-   panels.scenes = buildEntityPnl('scene','Scenes','\u{1F4CD}','Organize your story into scenes with prose blocks')
-   panels.conflicts = buildEntityPnl('conflict','Conflicts','\u2694\uFE0F','Track the 7 literary conflict types and their states')
-   panels.research = buildEntityPnl('research','Research','\u{1F4DA}','Store research notes and link them to entities')
-   panels.storycards = buildEntityPnl('storycard','StoryCards','\u{1F0CF}','Create story cards for strengths, weaknesses, and goals')
-   panels.threads = buildEntityPnl('thread','Threads','\u{1F501}','Track recurring motifs and story threads')
-   panels.wrksp = buildWrkspPnl()
-   panels.harmny = buildHarmnyPnl()
-   panels.export = buildExportPnl()
-   const pnlKeys = Object.keys(panels)
-   for(let i = 0; i < pnlKeys.length; i++){
-    if(pnlKeys[i] !== activeTab) panels[pnlKeys[i]].classList.add('hidden')
-    mainCont.appendChild(panels[pnlKeys[i]])
-   }
-   const statusBar = buildStatusBar()
-   U.appndChld(rootEl, hdr, tabBar, mainCont, statusBar)
-   renderSeedPnl()
-   renderProseBlocks()
-   updateWordCount(hdr)
-   updateTabBadges()
-   updateStatusBar()
-  }
-  return {
-   buildUI:buildUI, renderEntityCard:renderEntityCard, refreshAll:refreshAll,
-   renderWorkspace:renderWorkspace, renderHarmny:renderHarmny,
-   renderProseBlocks:renderProseBlocks, renderEntityPanel:renderEntityPanel,
-   renderSeedPnl:renderSeedPnl, updateWordCount:updateWordCount,
-   updateTabBadges:updateTabBadges, updateStatusBar:updateStatusBar,
-   getActiveTab:function(){ return activeTab }
-  }
- })(Utils, JhnTwainState)
-
-
- const JhnTwainCore = (function(S, UIX){
-  let autoSaveTimer = null
-  function init(){
-   loadSaved()
-   startAutoSave()
-   S.subscribe(function(){ UIX.refreshAll() })
-   initKeyboard()
-  }
-  function loadSaved(){
-   const d = Utils.loadFromStore('project')
-   if(d) S.importData(d)
-  }
-  function handleAction(action, payload){
-   switch(action){
-    case 'addEnt': S.addEnt(payload.type, payload.init); break
-    case 'delEnt': S.delEnt(payload.id); break
-    case 'updEnt': S.updEnt(payload.id, payload.changes); break
-    case 'lnkEnts': S.lnkEnts(payload.src, payload.tgt, payload.type); break
-   }
-  }
-  function syncUI(){ UIX.refreshAll() }
-  function autoSave(){
-   Utils.saveToStore('project', S.exportData())
-  }
-  function startAutoSave(){
-   if(autoSaveTimer) clearInterval(autoSaveTimer)
-   autoSaveTimer = setInterval(function(){ autoSave() }, 30000)
-  }
-  function initKeyboard(){
-   document.addEventListener('keydown', function(e){
-    if(e.ctrlKey || e.metaKey){
-     if(e.key === 's'){
-      e.preventDefault()
-      autoSave()
-      AppPlugins.showToast('Project saved!', 'success')
-     }
-     if(e.key === 'e'){
-      e.preventDefault()
-      const eas = ExportMgr.exportEAS()
-      Utils.saveToStore('lastEas', eas)
-      AppPlugins.showToast('EAS exported to clipboard!', 'success')
-     }
-     if(e.key === 'z' && !e.shiftKey){
-      e.preventDefault()
-      if(S.undo()){
-       AppPlugins.showToast('Undone', 'info')
-       UIX.refreshAll()
-      }
-     }
-     if(e.key === 'z' && e.shiftKey){
-      e.preventDefault()
-      if(S.redo()){
-       AppPlugins.showToast('Redone', 'info')
-       UIX.refreshAll()
-      }
-     }
-     if(e.key === 'Z'){
-      e.preventDefault()
-      if(S.redo()){
-       AppPlugins.showToast('Redone', 'info')
-       UIX.refreshAll()
-      }
-     }
-    }
-   })
-  }
-  return { init:init, handleAction:handleAction, syncUI:syncUI, autoSave:autoSave }
- })(JhnTwainState, JhnTwainUIX)
-
-
- const EntityMgr = (function(S){
-  const entTypes = {
-   char:{prefix:'@char',defaults:['name','aspect'],color:'#0ca'},
-   scene:{prefix:'@scene',defaults:['time','prose']},
-   conflict:{prefix:'@conflict',defaults:['type','magnitude','state']},
-   research:{prefix:'@research',defaults:['topic','notes']},
-   storycard:{prefix:'@card',defaults:['content','attachedTo','type']},
-   thread:{prefix:'@thread',defaults:['name','motif','appearsIn']},
-   conductor:{prefix:'@conductor',defaults:['harmony','tempo'],singleton:true},
-   narrTrain:{prefix:'@train',defaults:['momentum','nextBeat'],singleton:true},
-   multiverse:{prefix:'@multiverse',defaults:['branches','violations'],singleton:true}
-  }
-  function crtEnt(ty, initData){
-   if(!entTypes[ty]) return null
-   return S.addEnt(ty, initData || {})
-  }
-  function updAttr(id, attrPath, val){
-   const ent = S.getEntById(id)
-   if(!ent) return null
-   if(!ent.attrs) ent.attrs = {}
-   ent.attrs[attrPath] = val
-   ent.meta.modified = Date.now()
-   return ent
-  }
-  function getByTy(ty){ return S.getEntsByTy(ty) }
-  function getById(id){ return S.getEntById(id) }
-  function delEnt(id){ S.delEnt(id) }
-  function lnkEnts(srcId, tgtId, lnkTy){ S.lnkEnts(srcId, tgtId, lnkTy) }
-  function toEAS(){ return ExportMgr.exportEAS() }
-  function fromEAS(txt){
-   const parsed = AppPlugins.parseTextToEntities(txt)
-   for(let i = 0; i < parsed.length; i++){
-    const p = parsed[i]
-    const ty = p.type.replace('@','')
-    S.addEnt(ty, p.attrs)
-   }
-  }
-  function addCustomTy(newTyCfg){
-   if(!newTyCfg || !newTyCfg.key || !newTyCfg.prefix) return
-   entTypes[newTyCfg.key] = {
-    prefix:newTyCfg.prefix, defaults:newTyCfg.defaults||[],
-    color:newTyCfg.color||'#00ccaa', singleton:newTyCfg.singleton||false
-   }
-  }
-  function valAttr(ent, attr, val){
-   if(!ent || !ent.attrs) return false
-   return ent.attrs[attr] === val
-  }
-  return {
-   crtEnt:crtEnt, updAttr:updAttr, getByTy:getByTy, getById:getById,
-   delEnt:delEnt, lnkEnts:lnkEnts, toEAS:toEAS, fromEAS:fromEAS,
-   addCustomTy:addCustomTy, valAttr:valAttr
-  }
- })(JhnTwainState)
-
-
- const StorySeed = (function(S){
-  function updSeed(field, val){ S.set('seed.'+field, val) }
-  function getSeed(){ return S.get('seed') }
-  return {updSeed:updSeed, getSeed:getSeed}
- })(JhnTwainState)
-
-
- const ProseEngine = (function(S){
-  function saveProse(txt){
-   S.get('proseBlks').push({id:'blk-'+Date.now().toString(36), text:txt, symphony:{distance:'',chord:''}})
-  }
-  function getManuscript(){
-   const blks = S.get('proseBlks')
-   let ms = ''
-   for(let i = 0; i < blks.length; i++){
-    if(blks[i].text) ms += blks[i].text + '\n\n'
-   }
-   return ms.trim()
-  }
-  function applySymphony(blockId, attrs){
-   const blks = S.get('proseBlks')
-   for(let i = 0; i < blks.length; i++){
-    if(blks[i].id === blockId){
-     blks[i].symphony = Object.assign(blks[i].symphony || {}, attrs)
-     break
-    }
-   }
-  }
-  return {saveProse:saveProse, getManuscript:getManuscript, applySymphony:applySymphony}
- })(JhnTwainState)
-
-
- const HarmonyLayer = (function(S){
-  function getConductor(){ return S.get('harmny.conductor') }
-  function getNarrativeTrain(){ return S.get('harmny.narrTrain') }
-  function checkConsistency(){
-   const ents = S.getAllEnts()
-   const viol = []
-   const nameMap = {}
-   for(let i = 0; i < ents.length; i++){
-    const ent = ents[i]
-    if(ent.attrs.name){
-     if(nameMap[ent.attrs.name] && nameMap[ent.attrs.name] !== ent.id) viol.push('Duplicate name: '+ent.attrs.name)
-     nameMap[ent.attrs.name] = ent.id
-    }
-   }
-   const blks = S.get('proseBlks')
-   if(blks.length === 0) viol.push('No prose written yet')
-   const chars = S.getEntsByTy('character')
-   if(chars.length === 0) viol.push('No characters defined')
-   const conflicts = S.getEntsByTy('conflict')
-   const activeConf = conflicts.filter(function(c){ return c.attrs.state === 'active' })
-   if(activeConf.length === 0 && blks.length > 2) viol.push('No active conflicts - story may stall')
-   if(activeConf.length > 5) viol.push('Too many active conflicts - may overwhelm reader')
-   if(viol.length === 0) viol.push('All checks passed')
-   S.set('harmny.multiverse.violations', viol)
-   const harmony = Math.max(10, 100 - (viol.length * 15))
-   S.set('harmny.conductor.harmony', harmony)
-   JhnTwainUIX.renderHarmny()
-   const msg = viol.join('\n')
-   AppPlugins.showModal(msg, [{label:'OK', primary:true, fn:AppPlugins.hideModal}])
-   return viol
-  }
-  function suggestNext(){
-   const train = S.get('harmny.narrTrain')
-   const blks = S.get('proseBlks')
-   const chars = S.getEntsByTy('character')
-   const conflicts = S.getEntsByTy('conflict')
-   if(blks.length < 2) return 'Write more prose before seeking suggestions'
-   if(chars.length < 2) return 'Add more characters to develop interactions'
-   const activeConf = conflicts.filter(function(c){ return c.attrs.state === 'active' })
-   if(activeConf.length === 0) return 'Introduce a conflict to drive the story forward'
-   if(train.momentum === 'stalled') return 'Try a short action beat or dialogue to restore momentum'
-   if(train.momentum === 'cruising') return 'Good momentum. Consider raising the stakes or adding a twist'
-   return 'Story is progressing well. Keep writing'
-  }
-  return {
-   getConductor:getConductor, getNarrativeTrain:getNarrativeTrain,
-   checkConsistency:checkConsistency, suggestNext:suggestNext
-  }
- })(JhnTwainState)
-
-
- const Workspace = (function(S, UIX){
-  function renderCanvas(){ UIX.renderWorkspace() }
-  function handleCardDrop(id, x, y){}
-  function updateCardPos(id, x, y){}
-  function renderLinks(){}
-  return {renderCanvas:renderCanvas, handleCardDrop:handleCardDrop, updateCardPos:updateCardPos, renderLinks:renderLinks}
- })(JhnTwainState, JhnTwainUIX)
-
-
- const ExportMgr = (function(S){
-  function exportEAS(){
-   const seed = S.get('seed')
-   let eas = '# JhnTwain EAS v1\n'
-   if(seed.title) eas += '!story "'+seed.title+'"\n'
-   if(seed.target) eas += '    target '+seed.target+'\n'
-   if(seed.theme) eas += '    theme '+seed.theme+'\n'
-   if(seed.premise) eas += '    premise "'+seed.premise+'"\n'
-   eas += '\n'
-   const ents = S.getAllEnts()
-   const typePrefix = {
-    character:'@char', scene:'@scene', conflict:'@conflict',
-    research:'@research', storycard:'@card', thread:'@thread',
-    conductor:'@conductor', narrTrain:'@train', multiverse:'@multiverse'
-   }
-   for(let i = 0; i < ents.length; i++){
-    const ent = ents[i]
-    const prefix = typePrefix[ent.type] || '@'+ent.type
-    const name = ent.attrs.name || ent.id
-    eas += prefix+' '+name+'\n'
-    const attrKeys = Object.keys(ent.attrs)
-    for(let j = 0; j < attrKeys.length; j++){
-     const key = attrKeys[j]
-     if(key === 'name') continue
-     const val = ent.attrs[key]
-     if(val){
-      if(val.length > 40 || val.indexOf('\n') !== -1) eas += '    '+key+'\n        '+val+'\n'
-      else eas += '    '+key+' '+val+'\n'
-     }
-    }
-    eas += '\n'
-   }
-   return eas
-  }
-  function exportManuscript(){
-   const seed = S.get('seed')
-   const blks = S.get('proseBlks')
-   let ms = ''
-   if(seed.title) ms += seed.title + '\n\n'
-   for(let i = 0; i < blks.length; i++){
-    if(blks[i].text) ms += blks[i].text + '\n\n'
-   }
-   return ms.trim()
-  }
-  function importEAS(txt){
-   const parsed = AppPlugins.parseTextToEntities(txt)
-   for(let i = 0; i < parsed.length; i++){
-    const p = parsed[i]
-    const ty = p.type.replace('@','')
-    S.addEnt(ty, p.attrs)
-   }
-   return parsed.length
-  }
-  return {exportEAS:exportEAS, exportManuscript:exportManuscript, importEAS:importEAS}
- })(JhnTwainState)
-
-
- function init(){
-  JhnTwainUIX.buildUI()
-  JhnTwainCore.init()
- }
- return {
-  init:init, EntityMgr:EntityMgr, StorySeed:StorySeed, ProseEngine:ProseEngine,
-  HarmonyLayer:HarmonyLayer, Workspace:Workspace, ExportMgr:ExportMgr
- }
+/* ===== JhnTwainState ================================================= */
+const JhnTwainState = (function(){
+let data = { seed:{title:'',target:5000,theme:'',premise:'',seedTxt:''}, entities:new Map(), proseBlks:[], relations:[], harmny:{ conductor:{harmony:50,tempo:'steady',openThreads:[]}, narrTrain:{momentum:'building',nextBeat:'inciting-incident'}, multiverse:{branches:[],violations:[]} } }
+const listeners = [], MAX_HISTORY = 50
+let history = [], historyIdx = -1, paused = false
+function get(path){ if(!path) return data; return path.split('.').reduce((o,k)=>o?.[k], data) }
+function set(path, val){ const parts = path.split('.'), last = parts.pop(); const obj = parts.reduce((o,k)=>o[k]??={}, data); obj[last] = val; notify() }
+function addEnt(ty, init){ const id = ty + '-' + Date.now().toString(36) + Math.random().toString(36).substr(2,4); const ent = {id, type:ty, meta:{created:Date.now(),modified:Date.now()}, attrs:{name:'',...init}, color:getColor(ty), icon:getIcon(ty)}; data.entities.set(id, ent); notify(); return ent }
+function updEnt(id, ch){ const e = data.entities.get(id); if(!e) return; Object.assign(e.attrs, ch.attrs || {}); e.meta.modified = Date.now(); notify() }
+function delEnt(id){ data.entities.delete(id); data.relations = data.relations.filter(r=>r.src!==id && r.tgt!==id); notify() }
+function lnkEnts(src, tgt, typ){ data.relations.push({src, tgt, type:typ||'involves'}); notify() }
+function getEntsByTy(ty){ const r=[]; data.entities.forEach(e=>{ if(e.type===ty) r.push(e) }); return r }
+function getAllEnts(){ const arr=[]; data.entities.forEach(e=>arr.push(e)); return arr }
+function getRels(){ return data.relations }
+function getColor(ty){ const c={character:'#00ccaa',scene:'#ffaa00',conflict:'#ff5555',research:'#7777ff',storycard:'#cc88ff',thread:'#88ccff',conductor:'#ffff77',narrTrain:'#ff77aa',multiverse:'#aa77ff'}; return c[ty] || '#00ccaa' }
+function getIcon(ty){ const i={character:'👤',scene:'📍',conflict:'⚔️',research:'📚',storycard:'🃏',thread:'🔗',conductor:'🎼',narrTrain:'🚂',multiverse:'🌌'}; return i[ty] || '●' }
+function getTotalWordCount(){ let t = 0; data.proseBlks.forEach(b=> t += Utils.countWords(b.text)); t += Utils.countWords(data.seed.seedTxt); return t }
+function exportData(){ return JSON.stringify({seed:data.seed, entities:Array.from(data.entities.entries()), proseBlks:data.proseBlks, relations:data.relations, harmny:data.harmny}) }
+function importData(str){ try{ const d = JSON.parse(str); if(d.seed) data.seed = d.seed; if(d.entities) data.entities = new Map(d.entities); if(d.proseBlks) data.proseBlks = d.proseBlks; if(d.relations) data.relations = d.relations; if(d.harmny) data.harmny = d.harmny; notify(); return true }catch{return false} }
+function pushHistory(){ if(paused) return; const snap = exportData(); if(historyIdx < history.length-1) history = history.slice(0, historyIdx+1); history.push(snap); if(history.length>MAX_HISTORY) history.shift(); historyIdx = history.length-1 }
+function notify(){ pushHistory(); listeners.forEach(fn=>fn(data)) }
+function subscribe(fn){ listeners.push(fn); return ()=>{ const i = listeners.indexOf(fn); if(i>-1) listeners.splice(i,1) } }
+function undo(){ if(historyIdx<=0) return false; historyIdx--; paused=true; importData(history[historyIdx]); paused=false; return true }
+function redo(){ if(historyIdx>=history.length-1) return false; historyIdx++; paused=true; importData(history[historyIdx]); paused=false; return true }
+return {get, set, addEnt, updEnt, delEnt, lnkEnts, getEntsByTy, getAllEnts, getRels, getTotalWordCount, exportData, importData, subscribe, undo, redo, canUndo:()=>historyIdx>0, canRedo:()=>historyIdx<history.length-1}
 })()
 
-JhnTwain.init()
- </script>
-</body>
-</html>
+/* ===== ExportMgr ===================================================== */
+const ExportMgr = (function(S){
+function exportEAS(){
+ const seed = S.get('seed'); let out = '# JhnTwain EAS v1\n'
+ if(seed.title) out += `!story "${seed.title}"\n`
+ if(seed.target) out += ` target ${seed.target}\n`
+ if(seed.theme) out += ` theme ${seed.theme}\n`
+ if(seed.premise) out += ` premise "${seed.premise}"\n`
+ out += '\n'
+ const pre = {character:'@char',scene:'@scene',conflict:'@conflict',research:'@research',storycard:'@card',thread:'@thread'}
+ S.getAllEnts().forEach(ent=>{
+  const p = pre[ent.type] || '@'+ent.type
+  out += `${p} ${ent.attrs.name || ent.id}\n`
+  Object.keys(ent.attrs).forEach(k=>{ if(k==='name') return; const v = ent.attrs[k]; if(v.includes('\n') || v.length>40) out += ` ${k}\n ${v}\n`; else out += ` ${k} ${v}\n` })
+  out += '\n'
+ })
+ return out
+}
+function exportManuscript(){
+ const seed = S.get('seed'), blks = S.get('proseBlks')
+ let ms = ''
+ if(seed.title) ms += seed.title + '\n\n'
+ blks.forEach(b=>{ if(b.text) ms += b.text + '\n\n' })
+ return ms.trim()
+}
+function importEAS(txt){
+ const parsed = AppPlugins.parseEAS(txt)
+ parsed.forEach(p=> S.addEnt(p.type.replace('@',''), p.attrs))
+ return parsed.length
+}
+return {exportEAS, exportManuscript, importEAS}
+})(JhnTwainState)
+
+/* ===== BlobIO ========================================================= */
+const BlobIO = (function(U, S, Ex){
+let ta = null
+function mkPanel(){
+ const p = U.crtEl('div','jtw-pnl'); p.id = 'blobPnl'
+ const ttl = U.crtEl('div','jtw-section-ttl'); ttl.textContent = '📋 Blob IO'
+ ta = U.crtEl('textarea','jtw-txa'); ta.style.minHeight = '240px'; ta.placeholder = 'Paste EAS / prose / mixed text here…'
+ const row = U.crtEl('div','jtw-row')
+ const loadBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); loadBtn.textContent = '⬆ Accept Blob'
+ loadBtn.onclick = acceptBlob
+ const dumpBtn = U.crtEl('button','jtw-btn jtw-btn-sec'); dumpBtn.textContent = '⬇ Dump State'
+ dumpBtn.onclick = dumpBlob
+ const clrBtn = U.crtEl('button','jtw-btn jtw-btn-dng'); clrBtn.textContent = '🗑 Clear'; clrBtn.onclick = ()=> ta.value = ''
+ U.appndChld(row, loadBtn, dumpBtn, clrBtn)
+ U.appndChld(p, ttl, ta, row)
+ return p
+}
+function acceptBlob(){
+ const raw = ta.value.trim(); if(!raw) return
+ const parsed = AppPlugins.parseEAS(raw)
+ if(parsed.length){
+  parsed.forEach(p=> S.addEnt(p.type.replace('@',''), p.attrs))
+  AppPlugins.toast('Loaded '+parsed.length+' entities','success')
+ }else{
+  const blks = raw.split(/\n\n+/).filter(Boolean)
+  blks.forEach(b=> S.get('proseBlks').push({id:'blk-'+Date.now().toString(36), text:b, symphony:{}}))
+  AppPlugins.toast('Loaded '+blks.length+' prose blocks','success')
+ }
+ JhnTwainUIX.refreshAll()
+}
+function dumpBlob(){ ta.value = Ex.exportEAS(); ta.select() }
+return {mkPanel}
+})(Utils, JhnTwainState, ExportMgr)
+
+/* ===== JhnTwainUIX ==================================================== */
+const JhnTwainUIX = (function(U, S){
+const tabDefs = [
+ {key:'seed', label:'🌱 Seed', short:'Seed'},
+ {key:'prose', label:'✍️ Prose', short:'Prose'},
+ {key:'chars', label:'👤 Chars', short:'Chars', entTy:'character'},
+ {key:'scenes', label:'📍 Scenes', short:'Scenes', entTy:'scene'},
+ {key:'conflicts', label:'⚔️ Conflict', short:'Conflict', entTy:'conflict'},
+ {key:'research', label:'📚 Research', short:'Research', entTy:'research'},
+ {key:'storycards', label:'🃏 Cards', short:'Cards', entTy:'storycard'},
+ {key:'threads', label:'🔗 Threads', short:'Threads', entTy:'thread'},
+ {key:'wrksp', label:'🖼️ Wrksp', short:'Wrksp'},
+ {key:'harmny', label:'🎶 Harmny', short:'Harmny'},
+ {key:'export', label:'📤 Export', short:'Export'},
+ {key:'blob', label:'📋 Blob', short:'Blob'}
+]
+let root, activeTab = 'seed', panels = {}, tabBtns = {}, canvas, cardCont, wrkspPos = {}
+
+function buildHeader(){
+ const h = U.crtEl('div','jtw-hdr')
+ const brand = U.crtEl('div','jtw-hdr-brand')
+ const logo = U.crtEl('div','jtw-hdr-logo'); logo.textContent = 'Jt'
+ const ttl = U.crtEl('span','jtw-hdr-ttl'); ttl.textContent = 'JhnTwain'
+ const ver = U.crtEl('span','jtw-hdr-ver'); ver.textContent = 'v0.0.02'
+ U.appndChld(brand, logo, ttl, ver)
+ const acts = U.crtEl('div','jtw-hdr-acts')
+ const wcBadge = U.crtEl('div','jtw-wc-badge')
+ const wcBar = U.crtEl('div','jtw-wc-bar'); const wcFill = U.crtEl('div','jtw-wc-fill'); U.regCss(wcFill,{width:'0%',background:'#00ccaa'}); wcBar.appendChild(wcFill)
+ const wcTxt = U.crtEl('span'); wcTxt.textContent = '0 / 5000'
+ U.appndChld(wcBadge, wcTxt, wcBar)
+ const undo = U.crtEl('button','jtw-btn jtw-btn-sec jtw-btn-icon'); undo.textContent = '↩'; undo.title = 'Undo (Ctrl+Z)'
+ const redo = U.crtEl('button','jtw-btn jtw-btn-sec jtw-btn-icon'); redo.textContent = '↪'; redo.title = 'Redo (Ctrl+Shift+Z)'
+ const save = U.crtEl('button','jtw-btn jtw-btn-sec'); save.textContent = '💾 Save'
+ const ms = U.crtEl('button','jtw-btn jtw-btn-sec'); ms.textContent = '📖 Manuscript'
+ U.appndChld(acts, wcBadge, undo, redo, save, ms)
+ U.appndChld(h, brand, acts)
+ h._wcFill = wcFill; h._wcTxt = wcTxt
+ undo.onclick = ()=>{ if(S.undo()){ AppPlugins.toast('Undone','info'); refreshAll() } }
+ redo.onclick = ()=>{ if(S.redo()){ AppPlugins.toast('Redone','info'); refreshAll() } }
+ save.onclick = ()=>{ Utils.save('project', S.exportData()); AppPlugins.toast('Saved','success') }
+ ms.onclick = showManuscript
+ return h
+}
+function buildTabBar(){
+ const bar = U.crtEl('div','jtw-tab-bar')
+ tabDefs.forEach(td=>{
+  const b = U.crtEl('button','jtw-tab-btn'); b.textContent = td.label
+  if(td.entTy){
+   const badge = U.crtEl('span','jtw-tab-badge'); badge.textContent = '0'; badge._entTy = td.entTy
+   b.appendChild(badge)
+  }
+  if(td.key === activeTab) b.classList.add('active')
+  b.onclick = ()=> switchTab(td.key)
+  bar.appendChild(b); tabBtns[td.key] = b
+ })
+ return bar
+}
+function switchTab(k){
+ activeTab = k
+ Object.keys(panels).forEach(kk=> panels[kk].classList.toggle('hidden', kk!==k))
+ Object.keys(tabBtns).forEach(kk=> tabBtns[kk].classList.toggle('active', kk===k))
+ refreshTab()
+}
+function refreshTab(){
+ updateBadges()
+ if(activeTab === 'seed') renderSeed()
+ if(activeTab === 'prose') renderProse()
+ if(activeTab === 'chars') renderEntPanel('character')
+ if(activeTab === 'scenes') renderEntPanel('scene')
+ if(activeTab === 'conflicts') renderEntPanel('conflict')
+ if(activeTab === 'research') renderEntPanel('research')
+ if(activeTab === 'storycards') renderEntPanel('storycard')
+ if(activeTab === 'threads') renderEntPanel('thread')
+ if(activeTab === 'wrksp') renderWrksp()
+ if(activeTab === 'harmny') renderHarmny()
+ if(activeTab === 'export') renderExport()
+ if(activeTab === 'blob') {}
+}
+function updateBadges(){
+ Object.values(tabBtns).forEach(b=>{
+  const badge = b.querySelector('.jtw-tab-badge')
+  if(badge && badge._entTy) badge.textContent = S.getEntsByTy(badge._entTy).length
+ })
+}
+function renderSeed(){
+ const p = panels.seed
+ U.clrChld(p)
+ const seed = S.get('seed')
+ const hero = U.crtEl('div','jtw-seed-hero')
+ const ttl = U.crtEl('div','jtw-seed-hero-ttl'); ttl.textContent = seed.title || 'Untitled Story'
+ const sub = U.crtEl('div','jtw-seed-hero-sub'); sub.textContent = `${S.getTotalWordCount()} words / ${seed.target} target`
+ U.appndChld(hero, ttl, sub); p.appendChild(hero)
+ function fld(lbl, tag, key, ph){
+  const f = U.crtEl('div','jtw-field'), l = U.crtEl('label','jtw-lbl'); l.textContent = lbl
+  const inp = U.crtEl(tag,'jtw-inp'); inp.value = seed[key] || ''; inp.placeholder = ph
+  inp.oninput = ()=>{ S.set('seed.'+key, tag==='input'?inp.value:inp.value) }
+  U.appndChld(f, l, inp); p.appendChild(f); return inp
+ }
+ fld('Story Title','input','title','Give your story a name...')
+ fld('Target Word Count','input','target','5000').type = 'number'
+ fld('Theme(s)','input','theme','loneliness, redemption...')
+ const prms = fld('Premise','textarea','premise','One-sentence premise...')
+ const seedTxt = fld('Seed Text','textarea','seedTxt','Free-write your story seed...')
+ [prms, seedTxt].forEach(t=>{ t.style.minHeight = '80px'; autoGrow(t) })
+}
+function autoGrow(ta){ ta.style.height = 'auto'; ta.style.height = ta.scrollHeight + 'px' }
+function buildProse(){
+ const p = U.crtEl('div','jtw-pnl')
+ const hdr = U.crtEl('div'); U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'})
+ const ttl = U.crtEl('span','jtw-section-ttl'); ttl.textContent = 'Prose Blocks'
+ const addBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); addBtn.textContent = '+ Add Block'
+ addBtn.onclick = ()=>{ S.get('proseBlks').push({id:'blk-'+Date.now().toString(36),text:'',symphony:{}}); renderProse() }
+ U.appndChld(hdr, ttl, addBtn)
+ const cont = U.crtEl('div','jtw-prose-cont')
+ U.appndChld(p, hdr, cont)
+ p._cont = cont
+ return p
+}
+function renderProse(){
+ const p = panels.prose; if(!p) return
+ U.clrChld(p._cont)
+ const blks = S.get('proseBlks')
+ if(!blks.length){
+  const empty = U.crtEl('div','jtw-empty')
+  empty.innerHTML = `<div class="jtw-empty-icon">✍️</div><div class="jtw-empty-txt">No prose blocks yet</div><div class="jtw-empty-sub">Click + Add Block to start writing</div>`
+  p._cont.appendChild(empty); return
+ }
+ blks.forEach((blk,i)=>{
+  const d = U.crtEl('div','jtw-prose-blk')
+  const hd = U.crtEl('div'); U.regCss(hd,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'10px'})
+  const left = U.crtEl('div'); U.regCss(left,{display:'flex',alignItems:'center',gap:'8px'})
+  const lbl = U.crtEl('span'); lbl.textContent = 'Block '+(i+1)
+  const wc = U.crtEl('span'); wc.textContent = Utils.countWords(blk.text)+' words'
+  U.regCss(wc,{fontSize:'11px',color:'#445566'})
+  const del = U.crtEl('button','jtw-btn jtw-btn-dng'); del.textContent = 'Del'; del.style.fontSize = '11px'
+  let confirm = false
+  del.onclick = ()=>{ if(!confirm){ confirm = true; del.textContent = 'Sure?'; setTimeout(()=>{ confirm = false; del.textContent = 'Del' },3000) } else { S.get('proseBlks').splice(i,1); renderProse() } }
+  U.appndChld(left, lbl, wc); U.appndChld(hd, left, del)
+  const ta = U.crtEl('textarea','jtw-prose-blk-txa'); ta.value = blk.text || ''; ta.placeholder = 'Write your prose...'
+  ta.oninput = ()=>{ blk.text = ta.value; wc.textContent = Utils.countWords(blk.text)+' words'; autoGrow(ta) }
+  const symRow = U.crtEl('div','jtw-row'); symRow.style.marginTop = '10px'
+  const dist = U.crtEl('input','jtw-inp'); dist.placeholder = '📏 Distance (close/medium/far)'; dist.value = blk.symphony.distance || ''
+  dist.oninput = ()=>{ blk.symphony.distance = dist.value }
+  const chrd = U.crtEl('input','jtw-inp'); chrd.placeholder = '🎵 Chord (longing/tension/peace)'; chrd.value = blk.symphony.chord || ''
+  chrd.oninput = ()=>{ blk.symphony.chord = chrd.value }
+  U.appndChld(symRow, dist, chrd)
+  U.appndChld(d, hd, ta, symRow)
+  p._cont.appendChild(d)
+  setTimeout(()=>autoGrow(ta),10)
+ })
+}
+function buildEntPanel(ty, title, icon){
+ const p = U.crtEl('div','jtw-pnl')
+ const hdr = U.crtEl('div'); U.regCss(hdr,{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:'16px'})
+ const ttl = U.crtEl('span','jtw-section-ttl'); ttl.textContent = icon + ' ' + title
+ const add = U.crtEl('button','jtw-btn jtw-btn-pri'); add.textContent = '+ Add'
+ add.onclick = ()=>{ S.addEnt(ty, {name:'New '+ty}); refreshAll() }
+ U.appndChld(hdr, ttl, add)
+ const cont = U.crtEl('div','jtw-grid')
+ U.appndChld(p, hdr, cont)
+ p._cont = cont; p._ty = ty
+ return p
+}
+function renderEntPanel(ty){
+ const p = panels[ty.replace('s','')]
+ if(!p) return
+ U.clrChld(p._cont)
+ const ents = S.getEntsByTy(ty)
+ if(!ents.length){
+  const empty = U.crtEl('div','jtw-empty')
+  empty.innerHTML = `<div class="jtw-empty-icon">${S.getIcon(ty)}</div><div class="jtw-empty-txt">No ${ty} yet</div><div class="jtw-empty-sub">Click + Add to create one</div>`
+  p._cont.appendChild(empty); return
+ }
+ ents.forEach(ent=> p._cont.appendChild(renderEntCard(ent)))
+}
+function renderEntCard(ent){
+ const card = AppPlugins.createCard(ent)
+ const body = card._body
+ Object.keys(ent.attrs).forEach(k=>{
+  if(k==='name') return
+  const row = U.crtEl('div','jtw-card-attr-row')
+  const key = U.crtEl('span','jtw-card-attr-key'); key.textContent = k+':'
+  const val = U.crtEl('span','jtw-card-attr-val'); val.textContent = ent.attrs[k]
+  val.contentEditable = true
+  val.onblur = ()=>{ ent.attrs[k] = val.textContent; S.updEnt(ent.id,{}) }
+  U.appndChld(row, key, val)
+  body.appendChild(row)
+ })
+ card._ttl.contentEditable = true
+ card._ttl.onblur = ()=>{ ent.attrs.name = card._ttl.textContent; S.updEnt(ent.id,{}) }
+ card._del.onclick = ()=>{ S.delEnt(ent.id); refreshAll() }
+ return card
+}
+function buildWrksp(){
+ const p = U.crtEl('div','jtw-wrksp')
+ const tb = U.crtEl('div','jtw-wrksp-toolbar')
+ const addChar = U.crtEl('button','jtw-btn jtw-btn-sec'); addChar.textContent = '👤 Char'
+ const addScene = U.crtEl('button','jtw-btn jtw-btn-sec'); addScene.textContent = '📍 Scene'
+ const addConflict = U.crtEl('button','jtw-btn jtw-btn-sec'); addConflict.textContent = '⚔️ Conflict'
+ const addResearch = U.crtEl('button','jtw-btn jtw-btn-sec'); addResearch.textContent = '📚 Research'
+ const refresh = U.crtEl('button','jtw-btn jtw-btn-sec'); refresh.textContent = '🔄 Refresh'
+ addChar.onclick = ()=>{ S.addEnt('character',{name:'New Character'}); renderWrksp() }
+ addScene.onclick = ()=>{ S.addEnt('scene',{name:'New Scene'}); renderWrksp() }
+ addConflict.onclick = ()=>{ S.addEnt('conflict',{name:'New Conflict'}); renderWrksp() }
+ addResearch.onclick = ()=>{ S.addEnt('research',{name:'New Research'}); renderWrksp() }
+ refresh.onclick = renderWrksp
+ U.appndChld(tb, addChar, addScene, addConflict, addResearch, refresh)
+ const cc = U.crtEl('div'); U.regCss(cc,{position:'relative',flex:'1',overflow:'hidden',background:'radial-gradient(circle at 50% 50%, #0d1220 0%, #080c12 100%)'})
+ canvas = U.crtEl('canvas','jtw-wrksp-canvas')
+ cardCont = U.crtEl('div','jtw-wrksp-cards')
+ U.appndChld(cc, canvas, cardCont)
+ U.appndChld(p, tb, cc)
+ return p
+}
+function renderWrksp(){
+ if(!canvas || !cardCont) return
+ U.clrChld(cardCont)
+ const ents = S.getAllEnts()
+ if(!ents.length){
+  const empty = U.crtEl('div','jtw-empty')
+  empty.innerHTML = `<div class="jtw-empty-icon">🖼️</div><div class="jtw-empty-txt">Workspace empty</div><div class="jtw-empty-sub">Add entities via toolbar</div>`
+  cardCont.appendChild(empty); return
+ }
+ ents.forEach((ent,i)=>{
+  const card = AppPlugins.createCard(ent)
+  if(!wrkspPos[ent.id]){
+   const cols = Math.ceil(Math.sqrt(ents.length)), row = Math.floor(i / cols), col = i % cols
+   wrkspPos[ent.id] = {x: col * 320 + 24, y: row * 220 + 24}
+  }
+  const pos = wrkspPos[ent.id]
+  card.style.position = 'absolute'
+  card.style.transform = `translate(${pos.x}px,${pos.y}px)`
+  card._del.onclick = ()=>{ S.delEnt(ent.id); delete wrkspPos[ent.id]; renderWrksp() }
+  U.dragInit(card, {
+   onMove:(_,nx,ny)=>{ wrkspPos[ent.id] = {x:nx,y:ny}; drawLinks() },
+   onUp: drawLinks
+  })
+  cardCont.appendChild(card)
+ })
+ drawLinks()
+}
+function drawLinks(){
+ if(!canvas || !cardCont) return
+ canvas.width = cardCont.offsetWidth
+ canvas.height = cardCont.offsetHeight
+ const ctx = canvas.getContext('2d')
+ S.getRels().forEach(r=>{
+  const src = cardCont.querySelector(`[data-ent-id="${r.src}"]`)
+  const tgt = cardCont.querySelector(`[data-ent-id="${r.tgt}"]`)
+  if(!src || !tgt) return
+  const sr = src.getBoundingClientRect(), tr = tgt.getBoundingClientRect(), cr = canvas.getBoundingClientRect()
+  const sx = sr.left + sr.width/2 - cr.left, sy = sr.top + sr.height/2 - cr.top
+  const tx = tr.left + tr.width/2 - cr.left, ty = tr.top + tr.height/2 - cr.top
+  ctx.beginPath(); ctx.moveTo(sx,sy); ctx.bezierCurveTo(sx, sy+(ty-sy)*0.4, tx, ty-(ty-sy)*0.4, tx, ty)
+  ctx.strokeStyle = {involves:'#00ccaa',conflict:'#ff5555',thread:'#88ccff'}[r.type] || '#556677'
+  ctx.lineWidth = 2; ctx.setLineDash([6,4]); ctx.globalAlpha = 0.6; ctx.stroke(); ctx.globalAlpha = 1
+ })
+}
+function buildHarmny(){
+ const p = U.crtEl('div','jtw-pnl')
+ return p
+}
+function renderHarmny(){
+ const p = panels.harmny; if(!p) return
+ U.clrChld(p)
+ const h = S.get('harmny')
+ const grid = U.crtEl('div','jtw-harmny-grid')
+ ;['conductor','narrTrain','multiverse'].forEach(name=>{
+  const card = U.crtEl('div','jtw-harmny-card')
+  const ttl = U.crtEl('div','jtw-harmny-card-ttl'); ttl.textContent = ({conductor:'🎼 Conductor',narrTrain:'🚂 Narrative Train',multiverse:'🌌 Multiverse'}[name])
+  card.appendChild(ttl)
+  const btn = U.crtEl('button','jtw-btn jtw-btn-sec'); btn.textContent = 'Edit'
+  btn.onclick = ()=> alert('Edit '+name+' – stub')
+  card.appendChild(btn)
+  grid.appendChild(card)
+ })
+ p.appendChild(grid)
+}
+function buildExport(){
+ const p = U.crtEl('div','jtw-pnl')
+ const ttl = U.crtEl('div','jtw-section-ttl'); ttl.textContent = '📤 Export / Import'
+ const easBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); easBtn.textContent = '📄 Generate EAS'
+ const easTa = U.crtEl('textarea','jtw-txa'); easTa.style.minHeight = '200px'; easTa.readOnly = true
+ easBtn.onclick = ()=> easTa.value = ExportMgr.exportEAS()
+ const msBtn = U.crtEl('button','jtw-btn jtw-btn-pri'); msBtn.textContent = '📖 Generate Manuscript'
+ const msTa = U.crtEl('textarea','jtw-txa'); msTa.style.minHeight = '200px'; msTa.readOnly = true; msTa.style.fontFamily = 'serif'
+ msBtn.onclick = ()=> msTa.value = ExportMgr.exportManuscript()
+ U.appndChld(p, ttl, easBtn, easTa, msBtn, msTa)
+ return p
+}
+function renderExport(){}
+function showManuscript(){
+ const ms = ExportMgr.exportManuscript()
+ const div = U.crtEl('div','jtw-manuscript'); div.textContent = ms
+ AppPlugins.modal(div, [{label:'Close', primary:true, fn: ()=>div.parentElement.parentElement.remove()}])
+}
+function buildStatus(){
+ const s = U.crtEl('div','jtw-status-bar')
+ const left = U.crtEl('div','jtw-status-left')
+ const right = U.crtEl('div','jtw-status-right')
+ right.innerHTML = '<span class="jtw-kbd">Ctrl+S</span> Save <span class="jtw-status-sep">|</span> <span class="jtw-kbd">Ctrl+Z</span> Undo <span class="jtw-status-sep">|</span> <span class="jtw-kbd">Ctrl+Shift+Z</span> Redo'
+ U.appndChld(s, left, right)
+ return s
+}
+function refreshAll(){
+ renderSeed(); renderProse(); renderEntPanel('character'); renderEntPanel('scene'); renderEntPanel('conflict'); renderEntPanel('research'); renderEntPanel('storycard'); renderEntPanel('thread'); if(activeTab==='wrksp') renderWrksp(); if(activeTab==='harmny') renderHarmny(); updateBadges(); updateHeader()
+}
+function updateHeader(){
+ const h = root.querySelector('.jtw-hdr')
+ if(!h) return
+ const wc = S.getTotalWordCount(), target = S.get('seed.target') || 5000
+ h._wcTxt.textContent = `${wc} / ${target}`
+ h._wcFill.style.width = Math.min(100, Math.round(wc/target*100)) + '%'
+}
+function buildUI(){
+ root = U.crtEl('div'); root.id = 'root'
+ U.regCss(root,{display:'flex',flexDirection:'column',height:'100vh',width:'100vw',overflow:'hidden'})
+ /* global styles */
+ const gs = document.getElementById('jtwGlobalStyles')
+ const rules = [
+  ['*',{margin:'0',padding:'0',boxSizing:'border-box'}],
+  ['body',{background:'#0a0e14',color:'#e0e4ec',fontFamily:'"Inter",sans-serif',fontSize:'14px',lineHeight:'1.5',overflow:'hidden',height:'100vh',width:'100vw'}],
+  ['#root',{display:'flex',flexDirection:'column',height:'100vh',width:'100vw',overflow:'hidden'}],
+  ['.jtw-hdr',{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'12px 24px',background:'linear-gradient(180deg, #141a28 0%, #111620 100%)',borderBottom:'1px solid #1e2536',flexShrink:0}],
+  ['.jtw-hdr-logo',{width:'32px',height:'32px',borderRadius:'8px',background:'linear-gradient(135deg, #00ccaa 0%, #008877 100%)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:'16px',fontWeight:'800',color:'#0a0e14'}],
+  ['.jtw-tab-bar',{display:'flex',overflowX:'auto',background:'#0c1018',borderBottom:'1px solid #1e2536',flexShrink:0,scrollbarWidth:'none'}],
+  ['.jtw-tab-btn',{padding:'12px 14px',fontSize:'13px',color:'#556677',background:'none',border:'none',borderBottom:'2px solid transparent',cursor:'pointer',whiteSpace:'nowrap'}],
+  ['.jtw-tab-btn.active',{color:'#00ccaa',borderBottomColor:'#00ccaa',background:'rgba(0,204,170,0.04)'}],
+  ['.jtw-pnl',{flex:'1',overflowY:'auto',padding:'24px',maxWidth:'100%'}],
+  ['.jtw-pnl.hidden',{display:'none'}],
+  ['.jtw-grid',{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(280px,1fr))',gap:'16px'}],
+  ['.jtw-card:hover',{boxShadow:'0 4px 16px rgba(0,204,170,0.15)',transform:'translateY(-1px)'}],
+  ['.jtw-btn',{padding:'10px 18px',borderRadius:'8px',border:'none',cursor:'pointer',fontSize:'13px',fontWeight:'600',transition:'all 0.2s ease'}],
+  ['.jtw-btn-pri',{background:'linear-gradient(135deg, #00ccaa 0%, #00a88a 100%)',color:'#0a0e14'}],
+  ['.jtw-btn-sec',{background:'#1e2536',color:'#c0c8d8',border:'1px solid #2a3448'}],
+  ['.jtw-btn-dng',{background:'rgba(255,85,85,0.15)',color:'#ff5555',border:'1px solid rgba(255,85,85,0.3)'}],
+  ['.jtw-empty',{textAlign:'center',padding:'48px 24px',color:'#445566'}],
+  ['.jtw-empty-icon',{fontSize:'40px',opacity:0.4}],
+  ['.jtw-manuscript',{maxWidth:'680px',margin:'0 auto',padding:'24px 48px',background:'#0c1018',borderRadius:'10px',fontFamily:'serif',fontSize:'17px',lineHeight:'2',color:'#d0d4dc',whiteSpace:'pre-wrap'}],
+  ['.jtw-status-bar',{display:'flex',alignItems:'center',justifyContent:'space-between',padding:'0 16px',height:'24px',background:'#080c12',borderTop:'1px solid #1e2536',fontSize:'11px',color:'#445566'}],
+  ['.jtw-kbd',{display:'inline-block',padding:'2px 6px',borderRadius:'4px',background:'#1e2536',color:'#778899',fontSize:'11px',border:'1px solid #2a3448',fontFamily:'monospace'}]
+ ]
+ rules.forEach(r=> gs.sheet.insertRule(r[0]+'{'+Object.entries(r[1]).map(([k,v])=>k+':'+v).join(';')+'}'))
+ /* panels */
+ panels.seed = U.crtEl('div','jtw-pnl'); panels.prose = buildProse()
+ panels.chars = buildEntPanel('character','Characters','👤')
+ panels.scenes = buildEntPanel('scene','Scenes','📍')
+ panels.conflicts = buildEntPanel('conflict','Conflicts','⚔️')
+ panels.research = buildEntPanel('research','Research','📚')
+ panels.storycards = buildEntPanel('storycard','StoryCards','🃏')
+ panels.threads = buildEntPanel('thread','Threads','🔗')
+ panels.wrksp = buildWrksp()
+ panels.harmny = buildHarmny()
+ panels.export = buildExport()
+ panels.blob = BlobIO.mkPanel()
+ Object.keys(panels).forEach(k=>{ if(k!==activeTab) panels[k].classList.add('hidden'); root.appendChild(panels[k]) })
+ /* header / tab / status */
+ const header = buildHeader()
+ const tabBar = buildTabBar()
+ const status = buildStatus()
+ U.appndChld(root, header, tabBar, status)
+ document.body.appendChild(root)
+ refreshAll()
+}
+function refreshAll(){ renderSeed(); renderProse(); renderEntPanel('character'); renderEntPanel('scene'); renderEntPanel('conf|
